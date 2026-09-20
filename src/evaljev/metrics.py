@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable, Sequence
 from math import sqrt
-from typing import Iterable, Sequence
 
 from .models import DecisionTrace
 
@@ -72,7 +72,7 @@ def calibration_report(traces: Iterable[DecisionTrace], bins: int = 10) -> dict:
 def selective_risk_curve(
     confidences: Sequence[float], labels: Sequence[int], thresholds: Sequence[float] | None = None
 ) -> list[dict]:
-    thresholds = thresholds or [i / 20 for i in range(0, 21)]
+    thresholds = thresholds or [i / 20 for i in range(21)]
     rows = []
     for threshold in thresholds:
         kept = [(c, y) for c, y in zip(confidences, labels) if c >= threshold]

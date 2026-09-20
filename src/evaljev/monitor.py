@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from .models import DecisionAnswer, DecisionTrace, QuestionSpec
 from .store import InMemoryTraceStore, TraceStore
-
 
 ActionPolicy = Callable[[dict[str, DecisionAnswer]], str | None]
 

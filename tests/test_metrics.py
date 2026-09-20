@@ -1,4 +1,4 @@
-from evaljev.metrics import brier_score, expected_calibration_error, distribution_shift
+from evaljev.metrics import brier_score, distribution_shift, expected_calibration_error
 
 
 def test_metrics_smoke():

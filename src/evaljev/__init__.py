@@ -1,8 +1,8 @@
 from .client import JevHTTPClient
 from .lint import LintIssue, lint_questions
 from .metrics import (
-    brier_score,
     branch_flip_rate,
+    brier_score,
     calibration_report,
     distribution_shift,
     expected_calibration_error,
@@ -16,24 +16,24 @@ from .store import InMemoryTraceStore, JsonlTraceStore
 from .thresholds import optimize_binary_threshold
 
 __all__ = [
-    "JevHTTPClient",
-    "Monitor",
     "DecisionAnswer",
     "DecisionTrace",
+    "InMemoryTraceStore",
+    "JevHTTPClient",
+    "JsonlTraceStore",
+    "LintIssue",
+    "Monitor",
     "QuestionSpec",
     "ReplayResult",
-    "InMemoryTraceStore",
-    "JsonlTraceStore",
-    "calibration_report",
-    "expected_calibration_error",
-    "brier_score",
-    "selective_risk_curve",
     "branch_flip_rate",
+    "brier_score",
+    "calibration_report",
     "distribution_shift",
-    "optimize_binary_threshold",
-    "stability_check",
+    "expected_calibration_error",
     "lint_questions",
-    "LintIssue",
+    "optimize_binary_threshold",
     "replay",
+    "selective_risk_curve",
+    "stability_check",
     "summarize_replay",
 ]

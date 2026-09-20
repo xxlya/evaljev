@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from typing import Any
 
 from .models import DecisionAnswer, DecisionTrace, ReplayResult
 from .monitor import _parse_answers
-
 
 ActionPolicy = Callable[[dict[str, DecisionAnswer]], str | None]
 QuestionBuilder = Callable[[DecisionTrace], Mapping[str, Any]]

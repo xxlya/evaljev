@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from .models import QuestionSpec
 
@@ -17,8 +17,8 @@ class LintIssue:
 
 def lint_questions(questions: Iterable[QuestionSpec]) -> list[LintIssue]:
     issues: list[LintIssue] = []
-    subjective = re.compile(r"\b(important|good|bad|reasonable|appropriate|normal)\b", re.I)
-    composite = re.compile(r"\b(and|or)\b", re.I)
+    subjective = re.compile(r"\b(important|good|bad|reasonable|appropriate|normal)\b", re.IGNORECASE)
+    composite = re.compile(r"\b(and|or)\b", re.IGNORECASE)
 
     for q in questions:
         text = str(q.instructions)
