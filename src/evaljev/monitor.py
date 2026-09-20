@@ -3,24 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from .models import DecisionAnswer, DecisionTrace, QuestionSpec
+from .models import DecisionAnswer, DecisionTrace, question_specs
 from .store import InMemoryTraceStore, TraceStore
 
 ActionPolicy = Callable[[dict[str, DecisionAnswer]], str | None]
-
-
-def _question_specs(questions: Mapping[str, Any]) -> list[QuestionSpec]:
-    specs = []
-    for name, q in questions.items():
-        specs.append(
-            QuestionSpec(
-                name=name,
-                type=q["type"],
-                instructions=q.get("instructions"),
-                criteria=q.get("criteria"),
-            )
-        )
-    return specs
 
 
 def _parse_answers(response: dict, questions: Mapping[str, Any]) -> list[DecisionAnswer]:
@@ -90,7 +76,7 @@ class Monitor:
             policy_version=policy_version,
             workflow_version=workflow_version,
             state=state,
-            questions=_question_specs(questions),
+            questions=question_specs(questions),
             answers=answers,
             latency_ms=latency_ms,
             action=action,

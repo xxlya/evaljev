@@ -1,6 +1,19 @@
 from evaljev import QuestionSpec, lint_questions, optimize_binary_threshold
 
 
+def test_linter_accepts_the_raw_api_schema():
+    """The dict passed to decide() should lint without hand-building QuestionSpecs."""
+    raw = {
+        "route": {
+            "type": "choice",
+            "instructions": "Which option is appropriate?",
+            "criteria": {"a": "same", "b": "same"},
+        }
+    }
+    codes = {i.code for i in lint_questions(raw)}
+    assert codes == {"subjective", "no_fallback", "duplicate_criteria"}
+
+
 def test_linter_and_threshold():
     q = QuestionSpec(name="x", type="choice", instructions="What is important?", criteria={"a": "same", "b": "same"})
     issues = lint_questions([q])

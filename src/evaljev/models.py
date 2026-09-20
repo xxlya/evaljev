@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
@@ -14,6 +15,25 @@ class QuestionSpec(BaseModel):
     type: QuestionType
     instructions: Any
     criteria: Any | None = None
+
+
+def question_specs(questions: Mapping[str, Any] | Iterable[QuestionSpec]) -> list[QuestionSpec]:
+    """Normalize a question schema into ``QuestionSpec`` objects.
+
+    Accepts the raw ``{name: {"type": ..., "instructions": ...}}`` mapping sent to
+    the API, so the same object can be linted, traced and requested.
+    """
+    if isinstance(questions, Mapping):
+        return [
+            QuestionSpec(
+                name=name,
+                type=q["type"],
+                instructions=q.get("instructions"),
+                criteria=q.get("criteria"),
+            )
+            for name, q in questions.items()
+        ]
+    return [q if isinstance(q, QuestionSpec) else QuestionSpec(**q) for q in questions]
 
 
 class DecisionAnswer(BaseModel):

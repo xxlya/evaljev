@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
-from .models import QuestionSpec
+from .models import QuestionSpec, question_specs
 
 
 @dataclass
@@ -15,12 +16,13 @@ class LintIssue:
     message: str
 
 
-def lint_questions(questions: Iterable[QuestionSpec]) -> list[LintIssue]:
+def lint_questions(questions: Mapping[str, Any] | Iterable[QuestionSpec]) -> list[LintIssue]:
+    """Lint a decision schema, given either raw API question dicts or QuestionSpecs."""
     issues: list[LintIssue] = []
     subjective = re.compile(r"\b(important|good|bad|reasonable|appropriate|normal)\b", re.IGNORECASE)
     composite = re.compile(r"\b(and|or)\b", re.IGNORECASE)
 
-    for q in questions:
+    for q in question_specs(questions):
         text = str(q.instructions)
         if len(text.strip()) < 12:
             issues.append(LintIssue(q.name, "warning", "too_short", "Instructions may be underspecified."))
