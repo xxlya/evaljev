@@ -96,8 +96,10 @@ questions = {
 }
 
 def policy(answers):
+    # Threshold on the probability, not on `confidence` — see the note below.
     r = answers["route"]
-    return "both" if r.confidence is not None and r.confidence < 0.55 else r.selected
+    p_max = max(r.probabilities.values()) if r.probabilities else 1.0
+    return "both" if p_max < 0.64 else r.selected
 
 response, trace = monitor.run(
     client,
@@ -120,12 +122,28 @@ than editing the original, so a durable store keeps the full history of each
 decision. `TraceStore.list()` returns the newest version of each `trace_id`, so
 analytics see one row per decision with its outcome attached.
 
+### `confidence` is a margin, not a probability
+
+Jev reports Choice `confidence` as a normalized margin over a uniform prior,
+`c = (p_max - 1/k) / (1 - 1/k)` — verified against live traces to within the
+two-decimal reporting granularity. It carries no information beyond `p_max` and the
+option count `k`, and it has two sharp consequences:
+
+- **Calibration is scored on `p_max`.** `calibration_report` uses the answer's leading
+  probability, falling back to `confidence` only when no distribution is present.
+  Scoring a rescaled margin with ECE or Brier measures the wrong quantity.
+- **A confidence threshold is not portable.** `confidence < 0.55` means `p_max < 0.775`
+  when k=2 but `p_max < 0.595` when k=10. Adding one option to a `criteria` map moves
+  every threshold keyed on confidence, with no model or code change. Prefer thresholds
+  on `p_max`; `confidence_to_pmax(c, k)` converts an existing one.
+
 ## 2. Calibration report
 
 ```python
 from evaljev import calibration_report
 
 report = calibration_report(monitor.store.list("research-agent"))
+# {"route": {"n": ..., "accuracy": ..., "mean_probability": ..., "ece": ..., "brier": ...}}
 print(report)
 ```
 

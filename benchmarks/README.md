@@ -37,9 +37,16 @@ paraphrase branch flips  1/36  = 0.028      (mean JS shift 0.060)
 ordinal MAE              0.003
 ```
 
-Per family, ECE ranged from 0.002 (`extraction`, `ordinal`) to 0.174 (`policy`).
-For `noul` families the calibration row reports the **base rate** of the proposition,
-not decision accuracy — `P(true)` is paired against whether the proposition holds.
+Per family (ECE on `p_max`, see "Confidence is not a probability" below):
+
+```
+adequacy   [noul  ] rate 0.500  p̄ 0.513  ECE 0.0875   policy  [noul  ] rate 0.500  p̄ 0.381  ECE 0.1742
+extraction [choice] rate 1.000  p̄ 0.999  ECE 0.0008   routing [choice] rate 1.000  p̄ 0.997  ECE 0.0033
+intent     [choice] rate 1.000  p̄ 0.990  ECE 0.0100   ordinal [score ] rate 1.000  p̄ 0.998  ECE 0.0017
+```
+
+For `noul` families the rate column is the **base rate** of the proposition, not
+decision accuracy — `P(true)` is paired against whether the proposition holds.
 
 ### The one finding worth the whole run
 
@@ -74,12 +81,39 @@ rather than degrading silently, so it needs no detector.
 `--degrade vague-instructions` replaces the instruction text but keeps the rubric. It did
 **not** reduce accuracy (72/72 vs 71/72 — one item changed, in the *right* direction),
 which says the per-label criteria carry the semantics on this split. It did move
-calibration: `adequacy` ECE 0.087 → 0.189, `intent` 0.012 → 0.025, `extraction`
-0.002 → 0.029. A workflow edit can leave accuracy untouched while degrading the
-confidence your policy threshold keys on.
+calibration: `adequacy` ECE 0.088 → 0.189, `extraction` 0.001 → 0.020, `intent`
+0.010 → 0.019. A workflow edit can leave accuracy untouched while degrading the
+probability your policy threshold keys on.
 
 One run of n=72, so single-item differences are not significant. The calibration shift
 is the more trustworthy of the two observations.
+
+## Confidence is not a probability
+
+The API's Choice `confidence` is a normalized margin over a uniform prior, not a
+second probability estimate:
+
+    c = (p_max - 1/k) / (1 - 1/k)
+
+Checked against the 48 choice/score answers in this run: max absolute error **0.0100**,
+which is the reporting granularity of the two-decimal probabilities. So `confidence`
+carries no information beyond `p_max` and `k`.
+
+Two consequences, both of which the library now handles:
+
+1. **ECE and Brier must be computed on `p_max`, not on `confidence`.** Feeding a
+   rescaled margin to a calibration metric scores the wrong quantity. The error is
+   small when `p_max ≈ 1` (the transform is near-identity there) and largest when the
+   decision is uncertain — exactly the regime a threshold cares about. `k=2, p_max=0.6`
+   reports `confidence=0.2`.
+2. **A confidence threshold is not portable across schemas.** `confidence < 0.55`
+   escalates below `p_max` 0.775 at k=2 but 0.595 at k=10. Add one option to a criteria
+   map and every threshold keyed on confidence silently moves — no model change, no code
+   change, no accuracy change. Set thresholds on `p_max`, or convert with
+   `confidence_to_pmax(c, k)`.
+
+Source: [Jev's Architecture, Unmasked](https://archerhume.com/posts/jevs-architecture-unmasked/),
+verified here against live traces.
 
 ## Reproducing
 

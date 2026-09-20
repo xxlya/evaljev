@@ -51,6 +51,9 @@ PRICES = {
     "gemini": {"input": 0.30, "output": 2.50},
 }
 MAX_TOKENS = 400
+# p_max below this escalates to both models. Equivalent to the old confidence<0.55
+# cutoff at k=4, the option count of the route schema.
+ESCALATE_BELOW = 0.663
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -116,11 +119,15 @@ PARAPHRASES = [
 
 
 def policy(answers):
-    """Low confidence escalates to running both models."""
+    """An uncertain route escalates to running both models.
+
+    Thresholds on p_max, not on `confidence`. The API's confidence is a margin over
+    a uniform prior, so the same confidence cutoff is a different probability for
+    every option count — and moves the moment a criteria map gains an option.
+    """
     ans = answers["route"]
-    if ans.confidence is not None and ans.confidence < 0.55:
-        return "both"
-    return ans.selected
+    p_max = max(ans.probabilities.values()) if ans.probabilities else 1.0
+    return "both" if p_max < ESCALATE_BELOW else ans.selected
 
 
 # --- Budgeted execution leg --------------------------------------------------
@@ -210,7 +217,7 @@ def main() -> int:
                 questions=QUESTIONS,
                 policy=policy,
                 question_version="route-q1",
-                policy_version="escalate-below-0.55",
+                policy_version=f"escalate-below-pmax-{ESCALATE_BELOW}",
                 workflow_version="mvp-1",
                 metadata={"expected_route": expected},
             )
@@ -220,7 +227,7 @@ def main() -> int:
         ans = trace.answers[0]
         traces.append(trace)
         print(
-            f"  {prompt[:46]:<46} choice={ans.selected:<7} conf={ans.confidence:<5} "
+            f"  {prompt[:46]:<46} choice={ans.selected:<7} p_max={max(ans.probabilities.values()) if ans.probabilities else 1.0:<5} "
             f"action={trace.action:<7} expected={expected:<7} {trace.latency_ms:.0f}ms"
         )
 
@@ -252,7 +259,7 @@ def main() -> int:
         )
 
     # 4. Calibration, read back from the durable store rather than from memory.
-    section("4. Calibration report (confidence vs. correct routing)")
+    section("4. Calibration report (p_max vs. correct routing)")
     persisted = JsonlTraceStore(out_path).list("mvp-demo")
     print(f"read {len(persisted)} traces back from {out_path.name}")
     print(json.dumps(calibration_report(persisted), indent=2))
@@ -272,13 +279,16 @@ def main() -> int:
 
     # 6. Threshold optimization on the escalation decision.
     section("6. Threshold optimization (when to escalate to 'both')")
-    confidences = [t.answers[0].confidence or 0.0 for t in traces]
+    confidences = [
+        max(t.answers[0].probabilities.values()) if t.answers[0].probabilities else 0.0
+        for t in traces
+    ]
     labels = [int(bool(t.outcome_correct)) for t in traces]
     if confidences:
         best = optimize_binary_threshold(
             confidences, labels, false_positive_cost=1.0, false_negative_cost=4.0
         )
-        print(f"  confidences={confidences}")
+        print(f"  p_max      ={[round(c, 3) for c in confidences]}")
         print(f"  correct    ={labels}")
         print(f"  best (FN 4x costlier than FP): {best}")
         if len(set(labels)) < 2:

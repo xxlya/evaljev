@@ -207,7 +207,7 @@ def report(traces, tasks, title: str) -> dict:
         # is the base rate of the proposition, not the decision accuracy above.
         rate = "base" if qtypes.get(name) == "noul" else "acc "
         print(
-            f"  {name:<12} n={c['n']:<3} {rate} {c['accuracy']:.3f}  conf {c['mean_confidence']:.3f}  "
+            f"  {name:<12} n={c['n']:<3} {rate} {c['accuracy']:.3f}  p̄ {c['mean_probability']:.3f}  "
             f"ECE {c['ece']:.3f}  Brier {c['brier']:.3f}"
         )
     ordinal = [t for t in traces if t.metadata["qtype"] == "score" and t.metadata["expected"]]

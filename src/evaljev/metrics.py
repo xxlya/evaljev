@@ -4,7 +4,48 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from math import isfinite, sqrt
 
-from .models import DecisionTrace
+from .models import DecisionAnswer, DecisionTrace
+
+
+def confidence_to_pmax(confidence: float, k: int) -> float:
+    """Invert the API's Choice confidence back to the leading probability.
+
+    Jev reports ``confidence`` as a normalized margin over a uniform prior,
+    ``c = (p_max - 1/k) / (1 - 1/k)``, not as a probability. The inverse is
+    ``p_max = c * (1 - 1/k) + 1/k``.
+
+    This matters because the same confidence threshold means a different
+    probability for every option count: ``confidence < 0.55`` escalates below
+    p_max 0.775 when k=2 but below 0.595 when k=10. Add one option to a criteria
+    map and every threshold keyed on confidence silently moves.
+    """
+    if k < 2:
+        raise ValueError("k must be at least 2")
+    return confidence * (1 - 1 / k) + 1 / k
+
+
+def pmax_to_confidence(pmax: float, k: int) -> float:
+    """Normalized margin over a uniform prior — the API's Choice ``confidence``."""
+    if k < 2:
+        raise ValueError("k must be at least 2")
+    return (pmax - 1 / k) / (1 - 1 / k)
+
+
+def calibration_probability(ans: DecisionAnswer) -> float | None:
+    """The probability a calibration metric should score, or None if there is none.
+
+    Prefers the answer's own leading probability. ``confidence`` is a rescaled
+    margin, so feeding it to ECE or Brier scores the wrong quantity — the error
+    grows as the decision gets less certain, which is exactly the regime where
+    calibration decides whether a threshold fires.
+    """
+    if ans.probabilities:
+        return max(ans.probabilities.values())
+    if ans.type == "noul" and ans.value is not None:
+        return float(ans.value)
+    if ans.confidence is not None:
+        return float(ans.confidence)
+    return None
 
 
 def _labeled_pairs(traces: Iterable[DecisionTrace]):
@@ -12,8 +53,8 @@ def _labeled_pairs(traces: Iterable[DecisionTrace]):
         if trace.outcome_correct is None:
             continue
         for ans in trace.answers:
-            if ans.confidence is not None:
-                yield float(ans.confidence), int(trace.outcome_correct), ans.question_name
+            if ans.type != "noul" and (p := calibration_probability(ans)) is not None:
+                yield p, int(trace.outcome_correct), ans.question_name
             elif ans.type == "noul" and ans.value is not None:
                 # For Noul, the probability itself is meaningful only if the observed label
                 # corresponds to the proposition. Consumers can store proposition truth in metadata.
@@ -62,7 +103,7 @@ def calibration_report(traces: Iterable[DecisionTrace], bins: int = 10) -> dict:
         report[q] = {
             "n": len(rows),
             "accuracy": sum(ys) / len(ys),
-            "mean_confidence": sum(ps) / len(ps),
+            "mean_probability": sum(ps) / len(ps),
             "ece": expected_calibration_error(ps, ys, bins=bins),
             "brier": brier_score(ps, ys),
         }

@@ -91,7 +91,7 @@ def test_calibration_sees_outcomes_written_to_disk(tmp_path):
     report = calibration_report(JsonlTraceStore(path).list("w"))
     assert report["route"]["n"] == 4
     assert report["route"]["accuracy"] == 0.5
-    assert report["route"]["mean_confidence"] == 0.9
+    assert report["route"]["mean_probability"] == 0.9
 
 
 def test_workflow_filter_applies_before_collapsing():
