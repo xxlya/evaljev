@@ -35,13 +35,34 @@ pip install -e .
 pip install -e '.[llm,dev]'
 ```
 
-Environment variables:
+### Credentials
+
+Three keys, all read from the environment. Copy the template and fill it in:
+
+```bash
+cp .env.example .env
+set -a; source .env; set +a   # nothing loads .env automatically
+```
+
+| Variable | Used by | Required |
+| --- | --- | --- |
+| `TYPESAFE_API_KEY` | `JevHTTPClient` → `api.typesafe.ai` | Yes |
+| `VECTOR_API_KEY` | `call_claude` → Vector Institute proxy | Only for Claude |
+| `GEMINI_API_KEY` | `call_gemini` → Google AI Studio | Only for Gemini |
+
+Claude is reached through the Vector Institute's OpenAI-compatible proxy
+(`VECTOR_BASE_URL`, default `https://proxy.vectorinstitute.ai/v1`), not the
+Anthropic API, so the key is a `vp_`-prefixed proxy key rather than an
+`ANTHROPIC_API_KEY`. Or export directly instead of using `.env`:
 
 ```bash
 export TYPESAFE_API_KEY=...
-export ANTHROPIC_API_KEY=...
+export VECTOR_API_KEY=vp_...
 export GEMINI_API_KEY=...
 ```
+
+`.env` is gitignored. The test suite needs none of these — it mocks every
+client and makes no network calls.
 
 ## 1. Monitor a Jev decision
 
