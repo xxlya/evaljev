@@ -1,3 +1,4 @@
+from .budget import BudgetedJevClient, BudgetExceeded, SpendBudget
 from .client import JevHTTPClient
 from .lint import LintIssue, lint_questions
 from .metrics import (
@@ -16,6 +17,8 @@ from .store import InMemoryTraceStore, JsonlTraceStore
 from .thresholds import optimize_binary_threshold
 
 __all__ = [
+    "BudgetExceeded",
+    "BudgetedJevClient",
     "DecisionAnswer",
     "DecisionTrace",
     "InMemoryTraceStore",
@@ -25,6 +28,7 @@ __all__ = [
     "Monitor",
     "QuestionSpec",
     "ReplayResult",
+    "SpendBudget",
     "branch_flip_rate",
     "brier_score",
     "calibration_report",

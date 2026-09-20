@@ -25,6 +25,7 @@ Failures can come from the model, question schema, state construction, threshold
 - **Threshold optimization**: choose a binary operating point from labeled outcomes and asymmetric costs.
 - **Decision schema linting**: flags underspecified, subjective, composite, duplicate, and missing-fallback schemas.
 - **Decision replay**: rerun historical traces through a new model/question/policy and count changes, improvements, and regressions.
+- **Spend ceilings**: a per-API USD cap that refuses the call which would breach it, so an evaluation loop cannot drain an account.
 - **Claude/Gemini example**: Jev routes work to Claude, Gemini, or both; EvalJev records the decision path.
 
 ## Install
@@ -55,7 +56,7 @@ set -a; source .env; set +a
 
 | Variable | Used by | Required |
 | --- | --- | --- |
-| `TYPESAFE_API_KEY` | `JevHTTPClient` → `api.typesafe.ai` | Yes |
+| `JEV_API_KEY` | `JevHTTPClient` → `jevtypesafeai.com/api/v1/decide` | Yes |
 | `VECTOR_API_KEY` | `call_claude` → Vector Institute proxy | Only for Claude |
 | `GEMINI_API_KEY` | `call_gemini` → Google AI Studio | Only for Gemini |
 
@@ -65,7 +66,7 @@ Anthropic API, so the key is a `vp_`-prefixed proxy key rather than an
 `ANTHROPIC_API_KEY`. Or export directly instead of using `.env`:
 
 ```bash
-export TYPESAFE_API_KEY=...
+export JEV_API_KEY=jv_live_...
 export VECTOR_API_KEY=vp_...
 export GEMINI_API_KEY=...
 ```
@@ -174,6 +175,49 @@ results = replay(
 print(summarize_replay(results))
 ```
 
+## 5. Cap what an evaluation run can spend
+
+Replaying 10k traces is 10k billed requests. `SpendBudget` sets a hard per-API
+ceiling and `BudgetedJevClient` meters every `decide` against it — it duck-types
+`JevHTTPClient`, so it drops into `Monitor.run`, `stability_check`, and `replay`
+unchanged. Jev returns `usage.cost_usd` per response, so recorded Jev spend is
+the exact billed amount rather than an estimate.
+
+```python
+from evaljev import BudgetedJevClient, BudgetExceeded, JevHTTPClient, SpendBudget
+
+budget = SpendBudget({"jev": 5.00, "claude": 5.00, "gemini": 5.00})
+client = BudgetedJevClient(JevHTTPClient(), budget)
+
+try:
+    response, trace = monitor.run(client, ...)
+except BudgetExceeded as e:
+    print(e)  # jev: budget exhausted — spent $5.0000 of $5.00, ...
+
+print(budget.summary())
+print(client.credits_remaining_usd)  # account balance, straight from the API
+```
+
+The ceiling is checked *before* each call, so the request that would breach it is
+never sent. The library only ever receives USD amounts — provider rate cards stay
+in your code. For providers that do not report cost, charge a conservative upper
+bound (see `estimate_llm_cost` in `examples/mvp_demo.py`).
+
+## End-to-end demo
+
+`examples/mvp_demo.py` runs every feature above against the live API under a
+per-API cap, and writes enriched traces to `traces.jsonl`:
+
+```bash
+python examples/mvp_demo.py              # $5 per API
+python examples/mvp_demo.py --cap 0.50   # tighter cap
+```
+
+It lints the schema, monitors six live routing decisions, executes the chosen
+route, records outcomes, then reports calibration, stability, an optimized
+threshold, a replay against a sharpened schema, and total spend. Provider
+outages are captured as recorded failure outcomes rather than crashing the run.
+
 ## Suggested product architecture
 
 ```text
@@ -208,4 +252,4 @@ EvalJev should use `propose -> replay -> verify -> approve`, not silently mutate
 
 ## Status
 
-This is an MVP library skeleton intended for experimentation. The Jev adapter uses the documented direct HTTP contract (`model`, `state`, `questions`) so the monitoring layer is not tightly coupled to one SDK release.
+This is an MVP library skeleton intended for experimentation. The Jev adapter posts the documented direct HTTP contract (`state`, `questions`) to `JEV_BASE_URL` (default `https://jevtypesafeai.com/api/v1/decide`), so the monitoring layer is not tightly coupled to one SDK release.
