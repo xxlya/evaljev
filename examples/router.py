@@ -1,6 +1,6 @@
 """Jev -> Claude/Gemini router instrumented by EvalJev.
 
-Needs TYPESAFE_API_KEY, plus VECTOR_API_KEY and/or GEMINI_API_KEY depending on
+Needs JEV_API_KEY, plus VECTOR_API_KEY and/or GEMINI_API_KEY depending on
 which route Jev picks. Copy .env.example to .env and fill it in, or export them.
 """
 from pathlib import Path
