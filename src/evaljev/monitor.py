@@ -92,8 +92,14 @@ class Monitor:
         outcome: Any,
         correct: bool | None = None,
     ) -> DecisionTrace:
+        """Attach a downstream outcome and persist the enriched trace.
+
+        The enriched trace is appended rather than edited in place: append-only
+        stores keep the full history, and ``TraceStore.list`` returns the newest
+        version of each ``trace_id``. Without this second append, an outcome
+        recorded after a durable write would never reach the store.
+        """
         trace.outcome = outcome
         trace.outcome_correct = correct
-        # stores that persist immutable lines should append the enriched trace; users can
-        # de-duplicate by trace_id during analytics. In-memory objects update in place.
+        self.store.append(trace)
         return trace

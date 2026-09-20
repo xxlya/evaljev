@@ -114,6 +114,11 @@ response, trace = monitor.run(
 monitor.record_outcome(trace, outcome={"accepted": True}, correct=True)
 ```
 
+Trace stores are append-only: `record_outcome` appends the enriched trace rather
+than editing the original, so a durable store keeps the full history of each
+decision. `TraceStore.list()` returns the newest version of each `trace_id`, so
+analytics see one row per decision with its outcome attached.
+
 ## 2. Calibration report
 
 ```python
