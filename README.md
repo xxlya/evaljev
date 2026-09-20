@@ -33,6 +33,8 @@ Failures can come from the model, question schema, state construction, threshold
 pip install -e .
 # Optional Claude + Gemini integrations
 pip install -e '.[llm,dev]'
+# Optional: .env loading for examples/router.py
+pip install -e '.[examples]'
 ```
 
 ### Credentials
@@ -41,7 +43,14 @@ Three keys, all read from the environment. Copy the template and fill it in:
 
 ```bash
 cp .env.example .env
-set -a; source .env; set +a   # nothing loads .env automatically
+```
+
+The library never reads `.env` — it only reads `os.environ`. So either source it
+yourself, or let the example scripts load it (`pip install -e '.[examples]'`
+installs `python-dotenv`; `examples/router.py` loads the repo's `.env` on start):
+
+```bash
+set -a; source .env; set +a
 ```
 
 | Variable | Used by | Required |

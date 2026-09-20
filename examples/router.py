@@ -1,6 +1,37 @@
-"""Jev -> Claude/Gemini router instrumented by EvalJev."""
+"""Jev -> Claude/Gemini router instrumented by EvalJev.
+
+Needs TYPESAFE_API_KEY, plus VECTOR_API_KEY and/or GEMINI_API_KEY depending on
+which route Jev picks. Copy .env.example to .env and fill it in, or export them.
+"""
+from pathlib import Path
+
 from evaljev import JevHTTPClient, JsonlTraceStore, Monitor
 from evaljev.integrations import execute_model_route
+
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+
+def load_env() -> None:
+    """Load this repo's .env into the environment, if python-dotenv is available.
+
+    Kept optional and script-local: the library itself only reads os.environ and
+    never mutates it, so exported variables work whether or not this runs.
+
+    The path is pinned to the repo root deliberately. A bare ``load_dotenv()``
+    searches parent directories and will happily load an unrelated ~/.env,
+    pulling in credentials from outside the project. Already-exported variables
+    take precedence (``override=False``).
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        print("python-dotenv not installed; using already-exported environment")
+        return
+    if ENV_PATH.exists():
+        load_dotenv(ENV_PATH, override=False)
+        print(f"loaded credentials from {ENV_PATH}")
+    else:
+        print(f"no {ENV_PATH} found; using already-exported environment")
 
 QUESTIONS = {
     "route": {
@@ -24,6 +55,7 @@ def policy(answers):
 
 
 if __name__ == "__main__":
+    load_env()
     prompt = "Explain why a Python async task can silently swallow an exception."
     client = JevHTTPClient()
     monitor = Monitor(JsonlTraceStore("traces.jsonl"))
