@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
-from math import sqrt
+from collections.abc import Iterable, Mapping, Sequence
+from math import isfinite, sqrt
 
 from .models import DecisionTrace
 
@@ -81,6 +81,73 @@ def selective_risk_curve(
         risk = 1 - accuracy if accuracy is not None else None
         rows.append({"threshold": threshold, "coverage": coverage, "accuracy": accuracy, "risk": risk})
     return rows
+
+
+def distribution_is_valid(
+    probabilities: dict[str, float] | None,
+    labels: Sequence[str],
+    *,
+    tol: float = 1e-3,
+) -> tuple[bool, str | None]:
+    """Check a distribution against the exact declared label set.
+
+    Returns ``(valid, reason)``. Keys must match ``labels`` exactly, values must be
+    finite numbers in [0, 1], and the total must reach 1 within ``tol``.
+
+    This needs no ground truth, which is what makes it a production signal: a model
+    that starts emitting labels outside its own schema is broken whether or not the
+    answers happen to be right.
+    """
+    if not isinstance(probabilities, dict):
+        return False, "no distribution"
+    want, got = {str(v) for v in labels}, {str(k) for k in probabilities}
+    if got != want:
+        missing, extra = sorted(want - got), sorted(got - want)
+        return False, f"label mismatch: missing={missing} extra={extra}"
+    total = 0.0
+    for key, value in probabilities.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, f"{key!r} is not a number"
+        value = float(value)
+        if not isfinite(value):
+            return False, f"{key!r} is not finite"
+        if not 0.0 <= value <= 1.0:
+            return False, f"{key!r} outside [0, 1]: {value}"
+        total += value
+    if abs(total - 1.0) > tol:
+        return False, f"sums to {total:.4f}"
+    return True, None
+
+
+def schema_adherence(
+    traces: Iterable[DecisionTrace],
+    labels: Mapping[str, Sequence[str]],
+    *,
+    tol: float = 1e-3,
+) -> dict:
+    """Per-question rate of answers that are valid distributions over their labels.
+
+    ``labels`` maps a question name to the exact label set it declared. Questions
+    absent from the map are skipped; answers with no distribution count as invalid,
+    since a missing distribution is itself a schema failure.
+    """
+    stats: dict[str, dict] = {}
+    for trace in traces:
+        for ans in trace.answers:
+            if ans.question_name not in labels:
+                continue
+            row = stats.setdefault(
+                ans.question_name, {"n": 0, "valid": 0, "adherence": 0.0, "reasons": {}}
+            )
+            row["n"] += 1
+            ok, reason = distribution_is_valid(ans.probabilities, labels[ans.question_name], tol=tol)
+            if ok:
+                row["valid"] += 1
+            else:
+                row["reasons"][reason] = row["reasons"].get(reason, 0) + 1
+    for row in stats.values():
+        row["adherence"] = row["valid"] / row["n"] if row["n"] else 0.0
+    return stats
 
 
 def branch_flip_rate(before: Sequence[str], after: Sequence[str]) -> float:

@@ -17,6 +17,7 @@ env/
 # Generated trace stores
 traces.jsonl
 *.traces.jsonl
+benchmarks/*.jsonl
 
 # Tooling caches
 .pytest_cache/
