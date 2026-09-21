@@ -449,6 +449,24 @@ sample on which the *decision* gate can conclude anything at all. A rerun that s
 while the probability test on the same six items returned p=0.0312. That asymmetry is
 why both are reported.
 
+## Demo page
+
+`docs/` is a dependency-free static site — GitHub Pages serves it directly. Enable it
+under **Settings → Pages → Source: `main` / `/docs`**; there is no build step and no
+workflow to configure.
+
+```bash
+python benchmarks/export_demo_data.py   # regenerates docs/data.js from the stored traces
+python -m http.server -d docs 8765      # preview at http://localhost:8765
+```
+
+Every number on the page is computed by the library from `benchmarks/*.jsonl` and
+written into `docs/data.js`, so the demo cannot drift from the run that produced it —
+rerun the benchmark and the export, and the page follows. Charts are hand-built SVG
+with no dependencies; the categorical palette is validated for colour-vision
+deficiency against both the light and dark surfaces, and every chart carries direct
+labels or a table view so identity is never colour-alone.
+
 ## End-to-end demo
 
 `examples/mvp_demo.py` runs every feature above against the live API under a
