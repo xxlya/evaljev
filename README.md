@@ -24,7 +24,8 @@ Failures can come from the model, question schema, state construction, threshold
 - **Stability checks**: branch-flip rate and distribution shift across semantically equivalent states.
 - **Threshold optimization**: choose a binary operating point from labeled outcomes and asymmetric costs.
 - **Decision schema linting**: flags underspecified, subjective, composite, duplicate, and missing-fallback schemas.
-- **Decision replay**: rerun historical traces through a new model/question/policy and count changes, improvements, and regressions.
+- **Decision replay**: rerun historical traces through a new model/question/policy, with a paired test that says whether the difference is real.
+- **Failure attribution**: diff two windows of traffic and name the component that changed — schema, option set, policy, model, or inputs.
 - **Spend ceilings**: a per-API USD cap that refuses the call which would breach it, so an evaluation loop cannot drain an account.
 - **Claude/Gemini example**: Jev routes work to Claude, Gemini, or both; EvalJev records the decision path.
 
@@ -244,6 +245,52 @@ never sent. The library only ever receives USD amounts — provider rate cards s
 in your code. For providers that do not report cost, charge a conservative upper
 bound (see `estimate_llm_cost` in `examples/mvp_demo.py`).
 
+## 6. Attribute a change to a component
+
+A deployed decision has five moving parts: state construction, the question schema,
+the model, the policy/threshold, and the downstream action. When behaviour moves,
+the only question that matters is which one moved.
+
+Four of the five are already recorded on every trace, so this is a diff, not an
+inference — and it costs nothing:
+
+```python
+from evaljev import attribute, vendor_drift_check
+
+report = attribute(last_week, this_week, confidence_threshold=0.55)
+for f in report["findings"]:
+    print(f["component"], f["summary"])
+# option_set  question 'route': option set changed, k 3 -> 4;
+#             any confidence<0.55 threshold now fires at p_max 0.700 -> 0.663
+```
+
+Attribution is deliberately deterministic. Its output is evidence for changing
+production configuration, so it has to be reproducible and readable — "the criteria
+map gained an option, here is the diff" is auditable in a way that a model's opinion
+is not. `option_set` gets its own finding because option count is the one edit that
+silently moves every `confidence` threshold while leaving the model, the policy code
+and the accuracy untouched.
+
+When behaviour moved and **nothing recorded accounts for it**, the report sets
+`residual: true`. That is not a conclusion, it is an instruction — one replay
+separates the two remaining explanations:
+
+```python
+vendor_drift_check(sample_of_old_traces, client)
+# {"mean_distribution_shift": 0.007, "branch_flip_rate": 0.0, "vendor_drift": False,
+#  "verdict": "model reproduces its recorded answers; look at the input distribution"}
+```
+
+Both arms use the recorded state and the recorded schema, so the only variable is
+*when* the call was made. Distributions moved → the model changed underneath you.
+Distributions held → your traffic changed instead.
+
+`state_diff` is deliberately shallow: it catches a state builder that started or
+stopped emitting a field, and gross size changes. It does **not** detect semantic
+drift in the traffic — same keys, same size, different subject matter — which needs
+an embedding of the state. A clean state report is not evidence that inputs are
+unchanged.
+
 ## End-to-end demo
 
 `examples/mvp_demo.py` runs every feature above against the live API under a
@@ -282,7 +329,7 @@ Application
 
 1. OpenTelemetry exporter + Langfuse/LangSmith-compatible trace bridge.
 2. SQLite/Postgres trace store with immutable events and outcome joins.
-3. Workflow graph representation and node-to-workflow failure attribution.
+3. Workflow graph representation, so attribution can cross node boundaries instead of stopping at one decision.
 4. Dataset runner with semantic perturbation generators.
 5. Auto-repair proposer for questions/criteria/thresholds, followed by mandatory replay gates.
 6. Web dashboard: Traces / Calibration / Instability / Failures / AutoFix.

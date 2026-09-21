@@ -1,3 +1,13 @@
+from .attribution import (
+    Finding,
+    action_mix,
+    attribute,
+    behaviour_summary,
+    schema_diff,
+    state_diff,
+    vendor_drift_check,
+    version_diff,
+)
 from .budget import BudgetedJevClient, BudgetExceeded, SpendBudget
 from .client import JevHTTPClient
 from .lint import LintIssue, lint_questions
@@ -33,6 +43,7 @@ __all__ = [
     "BudgetedJevClient",
     "DecisionAnswer",
     "DecisionTrace",
+    "Finding",
     "InMemoryTraceStore",
     "JevHTTPClient",
     "JsonlTraceStore",
@@ -41,8 +52,11 @@ __all__ = [
     "QuestionSpec",
     "ReplayResult",
     "SpendBudget",
+    "action_mix",
     "answer_branch",
     "answer_distribution",
+    "attribute",
+    "behaviour_summary",
     "branch_flip_rate",
     "brier_score",
     "calibration_probability",
@@ -60,8 +74,12 @@ __all__ = [
     "rate_with_ci",
     "replay",
     "schema_adherence",
+    "schema_diff",
     "selective_risk_curve",
     "stability_check",
+    "state_diff",
     "summarize_replay",
+    "vendor_drift_check",
+    "version_diff",
     "wilson_interval",
 ]
