@@ -27,6 +27,15 @@ from .metrics import (
 from .models import DecisionAnswer, DecisionTrace, QuestionSpec, ReplayResult
 from .monitor import Monitor
 from .perturb import answer_branch, answer_distribution, stability_check
+from .repair import (
+    Candidate,
+    baseline_questions,
+    evaluate_candidate,
+    propose_candidates,
+    repair_cycle,
+    split_traces,
+    validate_candidate,
+)
 from .replay import replay, summarize_replay
 from .stats import (
     exact_mcnemar,
@@ -41,6 +50,7 @@ from .thresholds import optimize_binary_threshold
 __all__ = [
     "BudgetExceeded",
     "BudgetedJevClient",
+    "Candidate",
     "DecisionAnswer",
     "DecisionTrace",
     "Finding",
@@ -56,6 +66,7 @@ __all__ = [
     "answer_branch",
     "answer_distribution",
     "attribute",
+    "baseline_questions",
     "behaviour_summary",
     "branch_flip_rate",
     "brier_score",
@@ -64,6 +75,7 @@ __all__ = [
     "confidence_to_pmax",
     "distribution_is_valid",
     "distribution_shift",
+    "evaluate_candidate",
     "exact_mcnemar",
     "expected_calibration_error",
     "lint_questions",
@@ -71,14 +83,18 @@ __all__ = [
     "optimize_binary_threshold",
     "paired_comparison",
     "pmax_to_confidence",
+    "propose_candidates",
     "rate_with_ci",
+    "repair_cycle",
     "replay",
     "schema_adherence",
     "schema_diff",
     "selective_risk_curve",
+    "split_traces",
     "stability_check",
     "state_diff",
     "summarize_replay",
+    "validate_candidate",
     "vendor_drift_check",
     "version_diff",
     "wilson_interval",

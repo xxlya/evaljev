@@ -26,6 +26,7 @@ Failures can come from the model, question schema, state construction, threshold
 - **Decision schema linting**: flags underspecified, subjective, composite, duplicate, and missing-fallback schemas.
 - **Decision replay**: rerun historical traces through a new model/question/policy, with a paired test that says whether the difference is real.
 - **Failure attribution**: diff two windows of traffic and name the component that changed — schema, option set, policy, model, or inputs.
+- **Repair proposal**: generate candidate schemas from observed failures, then gate them on a held-out replay. Proposes; never applies.
 - **Spend ceilings**: a per-API USD cap that refuses the call which would breach it, so an evaluation loop cannot drain an account.
 - **Claude/Gemini example**: Jev routes work to Claude, Gemini, or both; EvalJev records the decision path.
 
@@ -291,6 +292,68 @@ drift in the traffic — same keys, same size, different subject matter — whic
 an embedding of the state. A clean state report is not evidence that inputs are
 unchanged.
 
+## 7. Propose a repair, and refuse to believe it without evidence
+
+`propose -> validate -> screen -> verify -> approve`. Only the first step uses a
+language model; everything after it is deterministic, because the output is a change
+to production configuration.
+
+```python
+from evaljev import repair_cycle
+from evaljev.integrations import call_gemini
+
+report = repair_cycle(
+    traces, client,
+    question_name="route",
+    generate=lambda prompt: call_gemini(prompt, model="gemini-2.5-pro"),
+    judge=lambda trace, action: action == trace.metadata["expected"],
+)
+print(report["next_step"])
+for row in report["approved"]:
+    print(row["candidate"]["rationale"], row["verify"]["p_value"])
+```
+
+Three properties are structural rather than configurable:
+
+- **Nothing is ever applied.** The cycle returns ranked proposals with their evidence.
+- **The proposer never sees the holdout.** Traces split deterministically by hashed
+  `trace_id`, so a proposal cannot be laundered by re-rolling the split until the
+  holdout agrees. Candidates are written from dev failures and judged on traces the
+  generator could not have fitted to.
+- **A candidate may not change the label set.** Adding or removing an option changes
+  `k`, which silently moves every threshold keyed on `confidence`. A repair that
+  quietly re-tunes every downstream cutoff is not a repair, so those candidates are
+  rejected before they cost anything.
+
+Candidates are filtered cheapest-first: free validation (label set, type, lint),
+then a dev-set screen, then the holdout replay with the paired test from section 4.
+
+### Does it work?
+
+A controlled experiment, since the fault is known in advance: take the JevBench
+`intent` schema (k=5, one schema shared by 12 decisions) and rotate each label's
+description onto its neighbour — same keys, same `k`, same instructions, only the
+rubric now points at the wrong option.
+
+```
+broken schema accuracy       3/12
+dev 5 / holdout 7, dev failures 2
+
+candidate 1  screen (dev n=5): +2 -0
+             verify (holdout n=7): +7 -0  discordant=7  p=0.0156  -> improvement
+```
+
+All three proposals recovered it from two dev failures, and the rationale named the
+mechanism: *"the original descriptions were incorrectly mapped to their keys; this
+version realigns each description with its semantically correct action key."* The
+recovered criteria are semantically correct but reworded rather than identical to the
+original — it re-derived the rule instead of reproducing an answer key, which is what
+the prompt asks for.
+
+Cost: $0.008 of Jev across 48 replays, plus one generator call. Note that 7 discordant
+pairs is barely past the minimum of 6 — a 12-decision schema is near the smallest
+sample on which this gate can conclude anything at all.
+
 ## End-to-end demo
 
 `examples/mvp_demo.py` runs every feature above against the live API under a
@@ -331,7 +394,7 @@ Application
 2. SQLite/Postgres trace store with immutable events and outcome joins.
 3. Workflow graph representation, so attribution can cross node boundaries instead of stopping at one decision.
 4. Dataset runner with semantic perturbation generators.
-5. Auto-repair proposer for questions/criteria/thresholds, followed by mandatory replay gates.
+5. Threshold repair to sit alongside the schema repair, and a multi-round loop that re-proposes from what the last gate rejected.
 6. Web dashboard: Traces / Calibration / Instability / Failures / AutoFix.
 
 ## Safety of auto-fix
