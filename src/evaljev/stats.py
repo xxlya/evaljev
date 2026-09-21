@@ -82,6 +82,24 @@ def min_discordant_for_significance(alpha: float = 0.05) -> int:
     return d
 
 
+def min_samples_for_signed_rank(alpha: float = 0.05) -> int:
+    """Smallest number of moved items the signed-rank test could ever call significant.
+
+    The counterpart to :func:`min_discordant_for_significance`, and the difference
+    between them is the whole point of having both tests. Each needs six items at
+    the default alpha — but McNemar needs six items whose **decision flipped**,
+    while this needs six items whose **probability moved at all**. On a schema
+    where only three decisions were ever wrong, the first can never conclude and
+    the second still can.
+    """
+    n = 1
+    while n < 1000:
+        if 2 / 2**n < alpha:
+            return n
+        n += 1
+    return n
+
+
 def paired_comparison(
     before: Sequence[bool | None],
     after: Sequence[bool | None],
@@ -198,6 +216,7 @@ def paired_shift(
         "alpha": alpha,
         "improved": improved,
         "worsened": worsened,
+        "min_samples_needed": min_samples_for_signed_rank(alpha),
         "median_delta": statistics.median(moved) if moved else 0.0,
         "mean_delta": statistics.fmean(differences) if differences else 0.0,
         "verdict": verdict,

@@ -348,3 +348,73 @@ def test_probability_shift_is_absent_without_labels():
         [trace("a")], ScriptedClient(lambda s: "claude"), questions={"route": BASELINE}
     )
     assert summarize_replay(results)["probability_shift"] is None
+
+
+# --- paired control ----------------------------------------------------------
+
+
+class PairedClient:
+    """Answers both arms of one request, so the control is contemporaneous."""
+
+    def __init__(self, base_choice, cand_choice):
+        self.base_choice, self.cand_choice = base_choice, cand_choice
+        self.calls = 0
+        self.last_questions = None
+
+    def decide(self, *, state, questions):
+        self.calls += 1
+        self.last_questions = questions
+        answers = {}
+        for name in questions:
+            choice = self.cand_choice if name.endswith("__cand") else self.base_choice
+            answers[name] = {"choice": choice, "probabilities": {choice: 0.9, "other": 0.1}}
+        return {"answers": answers}, 1.0
+
+
+def test_paired_evaluation_sends_both_arms_in_one_request():
+    from evaljev import evaluate_candidate_paired
+
+    traces = [trace(str(i), expected="claude") for i in range(8)]
+    client = PairedClient(base_choice="gemini", cand_choice="claude")
+    summary = evaluate_candidate_paired(
+        candidate(), BASELINE, traces, client, judge=judge, label_of=lambda t: t.metadata["expected"]
+    )
+    # One request per trace, not two.
+    assert client.calls == 8
+    assert set(client.last_questions) == {"route__base", "route__cand"}
+    assert summary["control"] == "paired"
+    assert summary["improvements"] == 8
+    assert summary["verdict"] == "improvement"
+
+
+def test_paired_arms_are_named_symmetrically():
+    """Both arms are suffixed so any effect of the name applies to both equally."""
+    from evaljev.repair import BASE_ARM, CAND_ARM
+
+    assert BASE_ARM != CAND_ARM
+    assert BASE_ARM.startswith("__") and CAND_ARM.startswith("__")
+
+
+def test_paired_control_uses_the_fresh_baseline_not_the_recording():
+    """The recorded action says 'claude'; the live baseline arm says 'gemini'."""
+    from evaljev import evaluate_candidate_paired
+
+    traces = [trace(str(i), action="claude", expected="claude") for i in range(6)]
+    client = PairedClient(base_choice="gemini", cand_choice="claude")
+    summary = evaluate_candidate_paired(candidate(), BASELINE, traces, client, judge=judge)
+    # Had it trusted the recording, old_correct would be True and there would be
+    # no improvements to find.
+    assert summary["improvements"] == 6
+
+
+def test_unknown_control_is_rejected():
+    traces = [trace(str(i), correct=False) for i in range(40)]
+    with pytest.raises(ValueError, match="unknown control"):
+        repair_cycle(
+            traces,
+            ScriptedClient(lambda s: "claude"),
+            question_name="route",
+            generate=lambda _: '[{"instructions": "A clearer routing rule."}]',
+            judge=judge,
+            control="telepathy",
+        )

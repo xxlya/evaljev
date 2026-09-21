@@ -351,3 +351,22 @@ def test_paired_shift_will_not_conclude_from_too_little():
     from evaljev import paired_shift
 
     assert paired_shift([0.4, 0.3])["verdict"] == "insufficient evidence"
+
+
+def test_both_tests_need_six_but_count_different_things():
+    """The power gain stated precisely: six flips versus six movements."""
+    from evaljev import min_discordant_for_significance, min_samples_for_signed_rank
+
+    assert min_discordant_for_significance(0.05) == 6  # six *flipped* decisions
+    assert min_samples_for_signed_rank(0.05) == 6  # six *moved* probabilities
+    assert min_samples_for_signed_rank(0.01) == 8
+
+
+def test_four_moved_items_cannot_reach_significance():
+    """Observed live: holdout of 4 with a +0.90 median shift still cannot conclude."""
+    from evaljev import paired_shift
+
+    result = paired_shift([0.9, 0.88, 0.91, 0.86])
+    assert result["p_value"] == pytest.approx(0.125)
+    assert result["verdict"] == "insufficient evidence"
+    assert result["min_samples_needed"] == 6

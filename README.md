@@ -26,7 +26,7 @@ Failures can come from the model, question schema, state construction, threshold
 - **Decision schema linting**: flags underspecified, subjective, composite, duplicate, and missing-fallback schemas.
 - **Decision replay**: rerun historical traces through a new model/question/policy, with a paired test that says whether the difference is real.
 - **Failure attribution**: diff two windows of traffic and name the component that changed — schema, option set, policy, model, or inputs.
-- **Repair proposal**: generate candidate schemas from observed failures, then gate them on a held-out replay. Proposes; never applies.
+- **Repair proposal**: generate candidate schemas from observed failures, then gate them on a held-out replay against a contemporaneous control. Proposes; never applies.
 - **Spend ceilings**: a per-API USD cap that refuses the call which would breach it, so an evaluation loop cannot drain an account.
 - **Claude/Gemini example**: Jev routes work to Claude, Gemini, or both; EvalJev records the decision path.
 
@@ -240,12 +240,38 @@ indicator. `repair_cycle(gate=...)` takes `"decision"` (default, strict),
 `"probability"` (sensitive; confirm on more traffic before applying), or
 `"both"`.
 
+Both need six items at the default alpha, and the difference between *which* six
+is the entire power gain: `min_discordant_for_significance()` counts decisions
+that **flipped**, `min_samples_for_signed_rank()` counts probabilities that
+**moved**. Check them before paying for a replay that cannot conclude.
+
+## 5. Measure a candidate against a contemporaneous control
+
+`evaluate_candidate_paired` puts the baseline and the candidate in **one request**
+against the same state, instead of comparing against a recording that may be days
+old. Drift and per-call jitter cancel, because both arms are measured in the same
+call.
+
+This is safe because questions attend to the shared state, not to each other —
+verified on the live API before relying on it. A question's distribution moves no
+more when a second question shares its request (mean JS **0.0058**) than between
+two identical requests (**0.0035**), and the largest single shift, 0.0353, was
+identical in both arms.
+
+It is also cheaper, since the state is encoded once: measured over 10 states,
+one two-question request versus two one-question requests cost **34.7% less**
+(34.6% fewer input tokens) and returned **49.4% faster**.
+
+```python
+repair_cycle(traces, client, question_name="route", generate=..., control="paired")
+```
+
 `stability_check(repeats=n)` additionally queries each state `n` times to measure a
 **noise floor**: how often the branch moves when the input does not. The API is not
 deterministic, so paraphrase instability only means something above that floor, which
 is what `excess_flip_rate` and `exceeds_noise` report.
 
-## 5. Cap what an evaluation run can spend
+## 6. Cap what an evaluation run can spend
 
 Replaying 10k traces is 10k billed requests. `SpendBudget` sets a hard per-API
 ceiling and `BudgetedJevClient` meters every `decide` against it — it duck-types
@@ -273,7 +299,7 @@ never sent. The library only ever receives USD amounts — provider rate cards s
 in your code. For providers that do not report cost, charge a conservative upper
 bound (see `estimate_llm_cost` in `examples/mvp_demo.py`).
 
-## 6. Attribute a change to a component
+## 7. Attribute a change to a component
 
 A deployed decision has five moving parts: state construction, the question schema,
 the model, the policy/threshold, and the downstream action. When behaviour moves,
@@ -319,7 +345,7 @@ drift in the traffic — same keys, same size, different subject matter — whic
 an embedding of the state. A clean state report is not evidence that inputs are
 unchanged.
 
-## 7. Propose a repair, and refuse to believe it without evidence
+## 8. Propose a repair, and refuse to believe it without evidence
 
 `propose -> validate -> screen -> verify -> approve`. Only the first step uses a
 language model; everything after it is deterministic, because the output is a change
@@ -353,7 +379,7 @@ Three properties are structural rather than configurable:
   rejected before they cost anything.
 
 Candidates are filtered cheapest-first: free validation (label set, type, lint),
-then a dev-set screen, then the holdout replay with the paired test from section 4.
+then a dev-set screen, then the holdout replay with the paired test from section 4, against the contemporaneous control from section 5.
 
 ### Does it work?
 

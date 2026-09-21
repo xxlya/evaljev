@@ -31,7 +31,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .lint import lint_questions
-from .models import DecisionTrace
+from .models import DecisionTrace, ReplayResult, answer_branch, answer_distribution
+from .monitor import _parse_answers
 from .replay import replay, summarize_replay
 
 Generate = Callable[[str], str]
@@ -156,6 +157,73 @@ def evaluate_candidate(
     )
     summary = summarize_replay(results, alpha=alpha)
     summary["question_name"] = candidate.question_name
+    return summary
+
+
+#: Symmetric suffixes for the two arms of a paired request. Both are suffixed so
+#: any effect of the question's name applies equally to baseline and candidate.
+BASE_ARM, CAND_ARM = "__base", "__cand"
+
+
+def evaluate_candidate_paired(
+    candidate: Candidate,
+    baseline: Mapping[str, Any],
+    traces: Sequence[DecisionTrace],
+    client: Any,
+    *,
+    policy: Callable | None = None,
+    judge: Judge | None = None,
+    label_of: Callable | None = None,
+    alpha: float = 0.05,
+) -> dict:
+    """Evaluate a candidate against a **contemporaneous** baseline.
+
+    Both schemas go in one request against the same state, so the control is
+    measured now rather than read from a recording that may be days old. That
+    removes vendor drift and per-call jitter between the arms, at fewer tokens
+    than asking twice: the state is encoded once.
+
+    Verified safe on the live API before this was written — a question's
+    distribution moves no more when a second question shares the request than it
+    does between two identical requests (mean JS 0.0058 vs 0.0035 jitter, and the
+    largest single shift, 0.0353, was identical in both arms). Questions attend to
+    the shared state, not to each other.
+    """
+    base_q = {**baseline}
+    cand_q = {**candidate.question}
+    name = candidate.question_name
+    base_name, cand_name = name + BASE_ARM, name + CAND_ARM
+
+    results = []
+    for trace in traces:
+        response, _ = client.decide(
+            state=trace.state, questions={base_name: base_q, cand_name: cand_q}
+        )
+        answers = {
+            a.question_name: a
+            for a in _parse_answers(response, {base_name: base_q, cand_name: cand_q})
+        }
+        base_ans, cand_ans = answers[base_name], answers[cand_name]
+
+        old_action = policy({name: base_ans}) if policy else answer_branch(base_ans)
+        new_action = policy({name: cand_ans}) if policy else answer_branch(cand_ans)
+        results.append(
+            ReplayResult(
+                trace_id=trace.trace_id,
+                old_action=old_action,
+                new_action=new_action,
+                changed=old_action != new_action,
+                old_correct=judge(trace, old_action) if judge else None,
+                new_correct=judge(trace, new_action) if judge else None,
+                expected_label=label_of(trace) if label_of else None,
+                old_probabilities=answer_distribution(base_ans),
+                new_probabilities=answer_distribution(cand_ans),
+            )
+        )
+
+    summary = summarize_replay(results, alpha=alpha)
+    summary["question_name"] = name
+    summary["control"] = "paired"
     return summary
 
 
@@ -285,6 +353,7 @@ def repair_cycle(
     holdout_fraction: float = 0.5,
     alpha: float = 0.05,
     gate: str = "decision",
+    control: str = "recorded",
 ) -> dict:
     """Run the full cycle and return ranked proposals. Applies nothing.
 
@@ -311,6 +380,18 @@ def repair_cycle(
     for candidate in candidates:
         candidate.problems = validate_candidate(candidate, baseline)
 
+    def evaluate(cand, subset):
+        if control == "paired":
+            return evaluate_candidate_paired(
+                cand, baseline, subset, client,
+                policy=policy, judge=judge, label_of=label_of, alpha=alpha,
+            )
+        if control != "recorded":
+            raise ValueError(f"unknown control: {control!r}")
+        return evaluate_candidate(
+            cand, subset, client, policy=policy, judge=judge, label_of=label_of, alpha=alpha
+        )
+
     evaluated = []
     for candidate in candidates:
         row: dict[str, Any] = {"candidate": candidate.as_dict()}
@@ -318,17 +399,13 @@ def repair_cycle(
             row["rejected_at"] = "validate"
             evaluated.append(row)
             continue
-        screen = evaluate_candidate(
-            candidate, dev, client, policy=policy, judge=judge, label_of=label_of, alpha=alpha
-        )
+        screen = evaluate(candidate, dev)
         row["screen"] = screen
         if screen["regressions"] > screen["improvements"]:
             row["rejected_at"] = "screen"
             evaluated.append(row)
             continue
-        row["verify"] = evaluate_candidate(
-            candidate, holdout, client, policy=policy, judge=judge, label_of=label_of, alpha=alpha
-        )
+        row["verify"] = evaluate(candidate, holdout)
         row["rejected_at"] = None if passes_gate(row["verify"], gate) else "verify"
         evaluated.append(row)
 
@@ -337,6 +414,7 @@ def repair_cycle(
     return {
         "question_name": question_name,
         "gate": gate,
+        "control": control,
         "baseline": baseline,
         "dev_traces": len(dev),
         "holdout_traces": len(holdout),
