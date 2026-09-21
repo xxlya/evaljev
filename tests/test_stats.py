@@ -284,3 +284,70 @@ def test_shift_ratio_is_none_without_a_noise_measurement():
     out = stability_check(client, states=[1, 2], questions=Q_NOUL, question_name="q")
     assert "shift_ratio" not in out
     assert out["mean_distribution_shift"] is not None  # noul now yields a distribution
+
+
+# --- signed-rank: the sensitive test ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "diffs,expected",
+    [
+        ([0.1] * 6, 0.03125),
+        ([0.1] * 5, 0.0625),
+        ([0.1, -0.2, 0.3, 0.4, 0.5, 0.6], 0.09375),
+    ],
+)
+def test_signed_rank_matches_the_exact_reference_values(diffs, expected):
+    from evaljev import wilcoxon_signed_rank
+
+    assert wilcoxon_signed_rank(diffs)["p_value"] == pytest.approx(expected)
+
+
+def test_signed_rank_drops_zeros_as_the_test_defines():
+    from evaljev import wilcoxon_signed_rank
+
+    result = wilcoxon_signed_rank([0.0, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+    assert result["n"] == 6
+    assert result["dropped_zeros"] == 2
+    assert result["p_value"] == pytest.approx(0.03125)
+
+
+def test_all_zero_differences_carry_no_evidence():
+    from evaljev import wilcoxon_signed_rank
+
+    assert wilcoxon_signed_rank([0.0, 0.0, 0.0])["p_value"] == 1.0
+
+
+def test_signed_rank_handles_tied_magnitudes():
+    from evaljev import wilcoxon_signed_rank
+
+    assert 0 < wilcoxon_signed_rank([0.2, 0.2, 0.2, -0.2, 0.5, 0.5])["p_value"] <= 1.0
+
+
+def test_it_sees_improvement_that_never_flips_a_decision():
+    """The whole reason this test exists.
+
+    Eight items where the correct label gained 0.19 of probability mass. Not one
+    crossed a threshold, so McNemar sees zero discordant pairs and reports p=1.0.
+    The signed-rank test sees a consistent move and reports it.
+    """
+    from evaljev import paired_comparison, paired_shift
+
+    deltas = [0.19] * 8
+    assert paired_comparison([True] * 8, [True] * 8)["p_value"] == 1.0  # blind to it
+    shift = paired_shift(deltas)
+    assert shift["verdict"] == "improvement"
+    assert shift["p_value"] < 0.01
+    assert shift["median_delta"] == pytest.approx(0.19)
+
+
+def test_paired_shift_names_a_regression():
+    from evaljev import paired_shift
+
+    assert paired_shift([-0.2] * 7)["verdict"] == "regression"
+
+
+def test_paired_shift_will_not_conclude_from_too_little():
+    from evaljev import paired_shift
+
+    assert paired_shift([0.4, 0.3])["verdict"] == "insufficient evidence"

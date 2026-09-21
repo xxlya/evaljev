@@ -13,6 +13,7 @@ independent accuracies, and it is why the test only looks at items that changed.
 
 from __future__ import annotations
 
+import statistics
 from collections.abc import Sequence
 from math import comb, sqrt
 
@@ -112,4 +113,92 @@ def paired_comparison(
         "alpha": alpha,
         "verdict": verdict,
         "min_discordant_needed": min_discordant_for_significance(alpha),
+    }
+
+
+def _rank_magnitudes(values: Sequence[float]) -> list[float]:
+    """Ranks of |value|, ties sharing their average rank."""
+    order = sorted(range(len(values)), key=lambda i: abs(values[i]))
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and abs(values[order[j + 1]]) == abs(values[order[i]]):
+            j += 1
+        shared = (i + j) / 2 + 1  # average of 1-based ranks i+1..j+1
+        for k in range(i, j + 1):
+            ranks[order[k]] = shared
+        i = j + 1
+    return ranks
+
+
+def wilcoxon_signed_rank(differences: Sequence[float], *, zero_tol: float = 1e-12) -> dict:
+    """Two-sided exact Wilcoxon signed-rank test on paired differences.
+
+    Where McNemar asks only "did the decision flip", this asks "did the quantity
+    move, and by how much". That difference in what is measured is the whole point:
+    a candidate that pushes the correct label's probability from 0.30 to 0.49 has
+    improved something real, and a test that only counts flips is blind to it.
+
+    Zero differences are dropped, as the test is defined. The null distribution is
+    computed exactly by subset-sum over the ranks for small samples, so the p-value
+    is trustworthy at the sample sizes decision schemas actually produce.
+    """
+    nonzero = [d for d in differences if abs(d) > zero_tol]
+    n = len(nonzero)
+    if n == 0:
+        return {"n": 0, "dropped_zeros": len(differences), "statistic": 0.0, "p_value": 1.0}
+
+    ranks = _rank_magnitudes(nonzero)
+    w_plus = sum(r for d, r in zip(nonzero, ranks) if d > 0)
+    w_minus = sum(r for d, r in zip(nonzero, ranks) if d < 0)
+    statistic = min(w_plus, w_minus)
+
+    # Ranks are integers or half-integers; double them so subset sums stay exact.
+    doubled = [round(r * 2) for r in ranks]
+    total = sum(doubled)
+    counts = [0] * (total + 1)
+    counts[0] = 1
+    for r in doubled:
+        for s in range(total, r - 1, -1):
+            if counts[s - r]:
+                counts[s] += counts[s - r]
+    target = round(statistic * 2)
+    at_or_below = sum(counts[: target + 1])
+    p = min(1.0, 2 * at_or_below / 2**n)
+
+    return {
+        "n": n,
+        "dropped_zeros": len(differences) - n,
+        "w_plus": w_plus,
+        "w_minus": w_minus,
+        "statistic": statistic,
+        "p_value": p,
+    }
+
+
+def paired_shift(
+    differences: Sequence[float], *, alpha: float = 0.05, zero_tol: float = 1e-12
+) -> dict:
+    """Signed-rank test plus the direction and size of the move.
+
+    The verdict names the direction only when the test clears ``alpha``; otherwise
+    it is "insufficient evidence", for the same reason as ``paired_comparison``.
+    """
+    result = wilcoxon_signed_rank(differences, zero_tol=zero_tol)
+    moved = [d for d in differences if abs(d) > zero_tol]
+    improved = sum(1 for d in moved if d > 0)
+    worsened = sum(1 for d in moved if d < 0)
+    if result["p_value"] < alpha:
+        verdict = "improvement" if improved > worsened else "regression"
+    else:
+        verdict = "insufficient evidence"
+    return {
+        **result,
+        "alpha": alpha,
+        "improved": improved,
+        "worsened": worsened,
+        "median_delta": statistics.median(moved) if moved else 0.0,
+        "mean_delta": statistics.fmean(differences) if differences else 0.0,
+        "verdict": verdict,
     }

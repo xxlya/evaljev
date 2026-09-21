@@ -20,7 +20,7 @@ Failures can come from the model, question schema, state construction, threshold
 ## MVP features
 
 - **Decision tracing**: state, question schema, full distributions, confidence, selected action, latency, model/question/policy/workflow versions.
-- **Calibration**: ECE, Brier score, accuracy/confidence summaries, selective-risk curves.
+- **Calibration**: ECE, Brier score, accuracy/probability summaries, selective-risk curves.
 - **Stability checks**: branch-flip rate and distribution shift across semantically equivalent states.
 - **Threshold optimization**: choose a binary operating point from labeled outcomes and asymmetric costs.
 - **Decision schema linting**: flags underspecified, subjective, composite, duplicate, and missing-fallback schemas.
@@ -213,6 +213,33 @@ changed decisions has not shown equivalence, it has shown nothing.
 `min_discordant_needed` is the floor below which the comparison could not have
 concluded at all (6 at the default alpha) — check it before paying for a replay.
 
+### Two tests, because they ask different questions
+
+McNemar can only use items whose decision flipped. That throws away everything
+else, and on a small schema there may not be six flips to have. Pass `label_of=`
+to `replay` and `summarize_replay` adds `probability_shift`: an exact Wilcoxon
+signed-rank test on how much probability mass moved onto the correct label, per
+item. It uses every item, including the ones that were already right.
+
+The difference is not academic. On a live repair of a deliberately broken schema,
+with the same six held-out decisions and the same candidate:
+
+```
+DECISION    +3 -0   discordant=3   p=0.2500   insufficient evidence
+PROBABILITY 6/6 improved, median delta +0.600, p=0.0312   improvement
+```
+
+Only three of the six were wrong to begin with, so only three *could* flip — the
+decision test was structurally unable to conclude, while the probability test saw
+a consistent 0.6 shift. Mass can also move a long way without any decision
+crossing a threshold, which is real progress a flip-counting test cannot see.
+
+They are not interchangeable. McNemar asks whether **behaviour** changed;
+signed-rank asks whether the **probability** improved, which is a leading
+indicator. `repair_cycle(gate=...)` takes `"decision"` (default, strict),
+`"probability"` (sensitive; confirm on more traffic before applying), or
+`"both"`.
+
 `stability_check(repeats=n)` additionally queries each state `n` times to measure a
 **noise floor**: how often the branch moves when the input does not. The API is not
 deterministic, so paraphrase instability only means something above that floor, which
@@ -352,7 +379,10 @@ the prompt asks for.
 
 Cost: $0.008 of Jev across 48 replays, plus one generator call. Note that 7 discordant
 pairs is barely past the minimum of 6 — a 12-decision schema is near the smallest
-sample on which this gate can conclude anything at all.
+sample on which the *decision* gate can conclude anything at all. A rerun that split
+6/6 instead of 5/7 had only 3 flippable items in the holdout and could not conclude,
+while the probability test on the same six items returned p=0.0312. That asymmetry is
+why both are reported.
 
 ## End-to-end demo
 

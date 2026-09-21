@@ -272,3 +272,79 @@ def test_too_few_traces_to_split_is_an_error():
         repair_cycle(
             [trace("a")], ScriptedClient(lambda s: "claude"), question_name="route", generate=lambda _: "[]"
         )
+
+
+# --- gates -------------------------------------------------------------------
+
+
+def test_gate_names_are_validated():
+    from evaljev.repair import passes_gate
+
+    with pytest.raises(ValueError, match="unknown gate"):
+        passes_gate({"verdict": "improvement"}, "vibes")
+
+
+def test_probability_gate_accepts_what_the_decision_gate_cannot_see():
+    """Mass moved consistently toward the right label, but nothing flipped."""
+    from evaljev.repair import passes_gate
+
+    summary = {
+        "verdict": "insufficient evidence",
+        "probability_shift": {"verdict": "improvement", "p_value": 0.008},
+    }
+    assert passes_gate(summary, "decision") is False
+    assert passes_gate(summary, "probability") is True
+    assert passes_gate(summary, "both") is False
+
+
+def test_decision_gate_stays_the_strict_default():
+    from evaljev.repair import passes_gate
+
+    summary = {"verdict": "improvement", "probability_shift": None}
+    assert passes_gate(summary, "decision") is True
+    assert passes_gate(summary, "probability") is False
+
+
+def test_replay_records_probability_movement():
+    """label_of is what turns a replay into a measurable quantity."""
+    from evaljev import replay, summarize_replay
+
+    traces = []
+    for i in range(8):
+        t = trace(str(i), action="gemini", expected="claude", correct=False)
+        t.answers[0].probabilities = {"claude": 0.30, "gemini": 0.65, "other": 0.05}
+        traces.append(t)
+
+    class Improved:
+        def decide(self, *, state, questions):
+            # Correct label gains mass but still does not win.
+            return {
+                "answers": {
+                    "route": {
+                        "choice": "gemini",
+                        "probabilities": {"claude": 0.49, "gemini": 0.46, "other": 0.05},
+                    }
+                }
+            }, 1.0
+
+    results = replay(
+        traces,
+        Improved(),
+        questions={"route": BASELINE},
+        judge=judge,
+        label_of=lambda t: t.metadata["expected"],
+    )
+    assert results[0].probability_delta() == pytest.approx(0.19)
+    summary = summarize_replay(results)
+    assert summary["verdict"] == "insufficient evidence"  # nothing flipped
+    assert summary["probability_shift"]["verdict"] == "improvement"
+    assert summary["probability_shift"]["median_delta"] == pytest.approx(0.19)
+
+
+def test_probability_shift_is_absent_without_labels():
+    from evaljev import replay, summarize_replay
+
+    results = replay(
+        [trace("a")], ScriptedClient(lambda s: "claude"), questions={"route": BASELINE}
+    )
+    assert summarize_replay(results)["probability_shift"] is None

@@ -3,14 +3,15 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from .models import DecisionAnswer, DecisionTrace, ReplayResult
+from .models import DecisionAnswer, DecisionTrace, ReplayResult, answer_distribution
 from .monitor import _parse_answers
-from .stats import paired_comparison, wilson_interval
+from .stats import paired_comparison, paired_shift, wilson_interval
 
 ActionPolicy = Callable[[dict[str, DecisionAnswer]], str | None]
 QuestionBuilder = Callable[[DecisionTrace], Mapping[str, Any]]
 StateBuilder = Callable[[DecisionTrace], Any]
 OutcomeJudge = Callable[[DecisionTrace, str | None], bool | None]
+LabelOf = Callable[[DecisionTrace], str | None]
 
 
 def replay(
@@ -21,7 +22,14 @@ def replay(
     state_builder: StateBuilder | None = None,
     policy: ActionPolicy | None = None,
     judge: OutcomeJudge | None = None,
+    label_of: LabelOf | None = None,
 ) -> list[ReplayResult]:
+    """Rerun traces through a candidate schema, model or policy.
+
+    Pass ``label_of`` to record which label each trace *should* have landed on.
+    That is what lets ``summarize_replay`` measure the probability movement as
+    well as the decision flips — a far more sensitive signal on small samples.
+    """
     results = []
     for trace in traces:
         q = questions(trace) if callable(questions) else questions
@@ -40,6 +48,11 @@ def replay(
         amap = {a.question_name: a for a in answers}
         new_action = policy(amap) if policy else _default_action(amap)
         new_correct = judge(trace, new_action) if judge else None
+
+        # Keep both distributions so a comparison can measure how far the
+        # probability moved, not only whether the decision flipped.
+        name = next(iter(amap)) if len(amap) == 1 else None
+        old_answer = next((a for a in trace.answers if a.question_name == name), None)
         results.append(
             ReplayResult(
                 trace_id=trace.trace_id,
@@ -48,6 +61,9 @@ def replay(
                 changed=trace.action != new_action,
                 old_correct=trace.outcome_correct,
                 new_correct=new_correct,
+                expected_label=label_of(trace) if label_of else None,
+                old_probabilities=answer_distribution(old_answer) if old_answer else None,
+                new_probabilities=answer_distribution(amap[name]) if name else None,
             )
         )
     return results
@@ -62,6 +78,14 @@ def summarize_replay(results: Iterable[ReplayResult], *, alpha: float = 0.05) ->
     "insufficient evidence", never "no difference". Check
     ``min_discordant_needed`` against ``discordant`` to see whether the run could
     have concluded anything at all.
+
+    When the replay recorded an expected label, ``probability_shift`` adds a second,
+    far more sensitive comparison: a signed-rank test on how much probability mass
+    moved onto the correct label per item. The two answer different questions.
+    McNemar asks whether behaviour changed; the signed-rank test asks whether the
+    underlying probability improved. A candidate can pass the second and fail the
+    first — that is real progress that has not yet crossed a threshold, which is a
+    leading indicator rather than a behaviour change.
     """
     rows = list(results)
     changed = sum(r.changed for r in rows)
@@ -69,7 +93,9 @@ def summarize_replay(results: Iterable[ReplayResult], *, alpha: float = 0.05) ->
     comparison = paired_comparison(
         [r.old_correct for r in rows], [r.new_correct for r in rows], alpha=alpha
     )
+    deltas = [d for d in (r.probability_delta() for r in rows) if d is not None]
     return {
+        "probability_shift": paired_shift(deltas, alpha=alpha) if deltas else None,
         "n": len(rows),
         "changed": changed,
         "change_rate": changed / len(rows) if rows else 0.0,

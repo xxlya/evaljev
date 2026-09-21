@@ -41,7 +41,9 @@ from .stats import (
     exact_mcnemar,
     min_discordant_for_significance,
     paired_comparison,
+    paired_shift,
     rate_with_ci,
+    wilcoxon_signed_rank,
     wilson_interval,
 )
 from .store import InMemoryTraceStore, JsonlTraceStore
@@ -82,6 +84,7 @@ __all__ = [
     "min_discordant_for_significance",
     "optimize_binary_threshold",
     "paired_comparison",
+    "paired_shift",
     "pmax_to_confidence",
     "propose_candidates",
     "rate_with_ci",
@@ -97,5 +100,6 @@ __all__ = [
     "validate_candidate",
     "vendor_drift_check",
     "version_diff",
+    "wilcoxon_signed_rank",
     "wilson_interval",
 ]

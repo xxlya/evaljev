@@ -142,15 +142,44 @@ def evaluate_candidate(
     *,
     policy: Callable | None = None,
     judge: Judge | None = None,
+    label_of: Callable | None = None,
     alpha: float = 0.05,
 ) -> dict:
     """Replay traces through a candidate and summarize with a paired test."""
     results = replay(
-        traces, client, questions=candidate.as_questions(), policy=policy, judge=judge
+        traces,
+        client,
+        questions=candidate.as_questions(),
+        policy=policy,
+        judge=judge,
+        label_of=label_of,
     )
     summary = summarize_replay(results, alpha=alpha)
     summary["question_name"] = candidate.question_name
     return summary
+
+
+def passes_gate(summary: Mapping[str, Any], gate: str) -> bool:
+    """Did this candidate clear the configured bar?
+
+    ``decision`` is the default and the strict one: the decisions themselves must
+    have improved significantly. ``probability`` accepts a significant movement of
+    probability mass onto the correct label, which is much more sensitive on small
+    samples but is a *leading indicator* — mass can move a long way without any
+    decision crossing a threshold. Use it when decision-level power is genuinely
+    unavailable, and confirm on more traffic before applying.
+    """
+    if gate == "decision":
+        return summary["verdict"] == "improvement"
+    if gate == "probability":
+        shift = summary.get("probability_shift")
+        return bool(shift and shift["verdict"] == "improvement")
+    if gate == "both":
+        shift = summary.get("probability_shift")
+        return summary["verdict"] == "improvement" and bool(
+            shift and shift["verdict"] == "improvement"
+        )
+    raise ValueError(f"unknown gate: {gate!r}")
 
 
 PROPOSE_PROMPT = """You are improving one typed decision schema for a production system.
@@ -251,9 +280,11 @@ def repair_cycle(
     generate: Generate,
     policy: Callable | None = None,
     judge: Judge | None = None,
+    label_of: Callable | None = None,
     n_candidates: int = 3,
     holdout_fraction: float = 0.5,
     alpha: float = 0.05,
+    gate: str = "decision",
 ) -> dict:
     """Run the full cycle and return ranked proposals. Applies nothing.
 
@@ -288,7 +319,7 @@ def repair_cycle(
             evaluated.append(row)
             continue
         screen = evaluate_candidate(
-            candidate, dev, client, policy=policy, judge=judge, alpha=alpha
+            candidate, dev, client, policy=policy, judge=judge, label_of=label_of, alpha=alpha
         )
         row["screen"] = screen
         if screen["regressions"] > screen["improvements"]:
@@ -296,15 +327,16 @@ def repair_cycle(
             evaluated.append(row)
             continue
         row["verify"] = evaluate_candidate(
-            candidate, holdout, client, policy=policy, judge=judge, alpha=alpha
+            candidate, holdout, client, policy=policy, judge=judge, label_of=label_of, alpha=alpha
         )
-        row["rejected_at"] = None if row["verify"]["verdict"] == "improvement" else "verify"
+        row["rejected_at"] = None if passes_gate(row["verify"], gate) else "verify"
         evaluated.append(row)
 
     approved = [r for r in evaluated if r.get("rejected_at") is None]
     approved.sort(key=lambda r: (r["verify"]["p_value"], -r["verify"]["improvements"]))
     return {
         "question_name": question_name,
+        "gate": gate,
         "baseline": baseline,
         "dev_traces": len(dev),
         "holdout_traces": len(holdout),
@@ -312,7 +344,8 @@ def repair_cycle(
         "candidates": evaluated,
         "approved": approved,
         "next_step": (
-            f"{len(approved)} candidate(s) improved the holdout at alpha={alpha}. "
+            f"{len(approved)} candidate(s) cleared the {gate} gate on the holdout at "
+            f"alpha={alpha}. "
             "Review the diff and apply manually."
             if approved
             else "No candidate showed a significant improvement on held-out traces. "

@@ -4,45 +4,9 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .metrics import distribution_shift
-from .models import DecisionAnswer
+from .models import DecisionAnswer, answer_branch, answer_distribution
 from .monitor import _parse_answers
 from .stats import wilson_interval
-
-
-def answer_branch(ans: DecisionAnswer) -> str | None:
-    """The branch a decision actually took, comparable across phrasings.
-
-    ``selected`` is only populated for choice answers. A score answer carries a
-    level, a noul answer a bare probability — so comparing ``selected`` alone
-    reports every noul and score decision as perfectly stable no matter what the
-    model did. Each type gets the label its branch is keyed on:
-
-    - choice: the selected label, or the distribution's argmax
-    - score:  the argmax level, since that is what an ordinal branch keys on
-    - noul:   the proposition's truth at the natural 0.5 cut
-    """
-    if ans.type == "noul":
-        return None if ans.value is None else ("yes" if ans.value >= 0.5 else "no")
-    if ans.selected is not None:
-        return ans.selected
-    if ans.probabilities:
-        return max(sorted(ans.probabilities), key=lambda k: ans.probabilities[k])
-    return None if ans.value is None else str(ans.value)
-
-
-def answer_distribution(ans: DecisionAnswer) -> dict[str, float] | None:
-    """The answer's distribution in label space, or None if it has none.
-
-    A noul answer reports a bare P(true), so every distribution-based metric sees
-    ``None`` and silently skips it. Expanding it to ``{"yes": p, "no": 1 - p}``
-    makes noul comparable with the other two types.
-    """
-    if ans.probabilities:
-        return ans.probabilities
-    if ans.type == "noul" and ans.value is not None:
-        p = float(ans.value)
-        return {"yes": p, "no": 1.0 - p}
-    return None
 
 
 def stability_check(
