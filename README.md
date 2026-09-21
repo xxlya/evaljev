@@ -163,6 +163,7 @@ print(stability_check(
     states=states,
     questions=questions,
     question_name="route",
+    repeats=3,   # optional: measure the API's own jitter as a noise floor
 ))
 ```
 
@@ -191,7 +192,29 @@ results = replay(
     policy=policy,
 )
 print(summarize_replay(results))
+# {"changed": 7, "improvements": 7, "regressions": 0, "discordant": 7,
+#  "p_value": 0.016, "verdict": "improvement", "min_discordant_needed": 6, ...}
 ```
+
+### Rates carry intervals, comparisons carry verdicts
+
+A rate computed from 36 samples is an interval, not a number: 1 flip in 36 pairs is
+`0.028` with a 95% interval of `[0.005, 0.142]`. Reporting the point estimate alone
+invites deployment decisions on noise, so `stability_check` returns
+`branch_flip_ci` and `summarize_replay` returns `change_rate_ci`.
+
+Replay is **paired** — the candidate reruns the same items — so `summarize_replay`
+compares with an exact McNemar test on the decisions that changed, not with an
+accuracy delta. Its `verdict` is `improvement`, `regression`, or
+`insufficient evidence`, and it is never "no difference": a replay with too few
+changed decisions has not shown equivalence, it has shown nothing.
+`min_discordant_needed` is the floor below which the comparison could not have
+concluded at all (6 at the default alpha) — check it before paying for a replay.
+
+`stability_check(repeats=n)` additionally queries each state `n` times to measure a
+**noise floor**: how often the branch moves when the input does not. The API is not
+deterministic, so paraphrase instability only means something above that floor, which
+is what `excess_flip_rate` and `exceeds_noise` report.
 
 ## 5. Cap what an evaluation run can spend
 

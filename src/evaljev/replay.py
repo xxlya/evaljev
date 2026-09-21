@@ -5,6 +5,7 @@ from typing import Any
 
 from .models import DecisionAnswer, DecisionTrace, ReplayResult
 from .monitor import _parse_answers
+from .stats import paired_comparison, wilson_interval
 
 ActionPolicy = Callable[[dict[str, DecisionAnswer]], str | None]
 QuestionBuilder = Callable[[DecisionTrace], Mapping[str, Any]]
@@ -52,18 +53,34 @@ def replay(
     return results
 
 
-def summarize_replay(results: Iterable[ReplayResult]) -> dict:
+def summarize_replay(results: Iterable[ReplayResult], *, alpha: float = 0.05) -> dict:
+    """Summarize a replay, with an explicit verdict on whether the change is real.
+
+    ``verdict`` is the gate a candidate has to pass before it goes anywhere near
+    production. It is paired (McNemar) because replay re-runs the same items, and
+    it is conservative: a replay that produced too few changed decisions reports
+    "insufficient evidence", never "no difference". Check
+    ``min_discordant_needed`` against ``discordant`` to see whether the run could
+    have concluded anything at all.
+    """
     rows = list(results)
     changed = sum(r.changed for r in rows)
-    improvements = sum(r.old_correct is False and r.new_correct is True for r in rows)
-    regressions = sum(r.old_correct is True and r.new_correct is False for r in rows)
     known_new = [r for r in rows if r.new_correct is not None]
+    comparison = paired_comparison(
+        [r.old_correct for r in rows], [r.new_correct for r in rows], alpha=alpha
+    )
     return {
         "n": len(rows),
         "changed": changed,
         "change_rate": changed / len(rows) if rows else 0.0,
-        "improvements": improvements,
-        "regressions": regressions,
+        "change_rate_ci": wilson_interval(changed, len(rows)),
+        "improvements": comparison["improvements"],
+        "regressions": comparison["regressions"],
+        "discordant": comparison["discordant"],
+        "min_discordant_needed": comparison["min_discordant_needed"],
+        "p_value": comparison["p_value"],
+        "verdict": comparison["verdict"],
+        "labelled": comparison["n"],
         "new_accuracy": (
             sum(bool(r.new_correct) for r in known_new) / len(known_new) if known_new else None
         ),

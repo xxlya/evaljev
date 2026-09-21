@@ -33,9 +33,13 @@ EvalJev does not re-derive JevBench's scoring beyond that.
 ```
 accuracy                 71/72 = 0.986      ($0.000155/decision, p50 888ms, p95 1140ms)
 schema adherence         72/72 = 1.000      (all six families)
-paraphrase branch flips  1/36  = 0.028      (mean JS shift 0.060)
+paraphrase branch flips  1/36  = 0.028      95% CI [0.005, 0.142], mean JS shift 0.060
 ordinal MAE              0.003
 ```
+
+Note the interval on the flip rate. One flip in 36 pairs is a twenty-eight-fold
+range, not a number; pinning it to ±0.01 needs n≈1000 (about $0.16). Every rate in
+this harness now reports its interval for that reason.
 
 Per family (ECE on `p_max`, see "Confidence is not a probability" below):
 
@@ -85,8 +89,20 @@ calibration: `adequacy` ECE 0.088 → 0.189, `extraction` 0.001 → 0.020, `inte
 0.010 → 0.019. A workflow edit can leave accuracy untouched while degrading the
 probability your policy threshold keys on.
 
-One run of n=72, so single-item differences are not significant. The calibration shift
-is the more trustworthy of the two observations.
+The paired test makes the strength of that evidence explicit:
+
+```
+paired test: 1 improvements, 0 regressions, 1 discordant -> p=1.000
+VERDICT: INSUFFICIENT EVIDENCE
+(needed 6 same-direction changes to reach p<0.05; this run had 1)
+```
+
+Replay is naturally paired — the candidate sees the same items — so the comparison
+uses exact McNemar on the changed decisions rather than an accuracy delta. The
+accuracy moved `0.986 → 1.000` and that means nothing at this sample size. Six
+same-direction changes is the floor at which any conclusion is reachable at all;
+below it, a run cannot conclude no matter how lopsided it looks. The calibration
+shift is the more trustworthy of the two observations.
 
 ## Confidence is not a probability
 

@@ -16,8 +16,15 @@ from .metrics import (
 )
 from .models import DecisionAnswer, DecisionTrace, QuestionSpec, ReplayResult
 from .monitor import Monitor
-from .perturb import stability_check
+from .perturb import answer_branch, answer_distribution, stability_check
 from .replay import replay, summarize_replay
+from .stats import (
+    exact_mcnemar,
+    min_discordant_for_significance,
+    paired_comparison,
+    rate_with_ci,
+    wilson_interval,
+)
 from .store import InMemoryTraceStore, JsonlTraceStore
 from .thresholds import optimize_binary_threshold
 
@@ -34,6 +41,8 @@ __all__ = [
     "QuestionSpec",
     "ReplayResult",
     "SpendBudget",
+    "answer_branch",
+    "answer_distribution",
     "branch_flip_rate",
     "brier_score",
     "calibration_probability",
@@ -41,13 +50,18 @@ __all__ = [
     "confidence_to_pmax",
     "distribution_is_valid",
     "distribution_shift",
+    "exact_mcnemar",
     "expected_calibration_error",
     "lint_questions",
+    "min_discordant_for_significance",
     "optimize_binary_threshold",
+    "paired_comparison",
     "pmax_to_confidence",
+    "rate_with_ci",
     "replay",
     "schema_adherence",
     "selective_risk_curve",
     "stability_check",
     "summarize_replay",
+    "wilson_interval",
 ]

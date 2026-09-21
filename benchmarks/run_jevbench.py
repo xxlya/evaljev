@@ -35,7 +35,9 @@ from evaljev import (
     SpendBudget,
     calibration_report,
     distribution_shift,
+    paired_comparison,
     schema_adherence,
+    wilson_interval,
 )
 
 WORKFLOW = "jevbench"
@@ -177,9 +179,12 @@ def paraphrase_stability(traces, groups: dict) -> dict:
             p, q = base.metadata.get("predicted_probs"), other.metadata.get("predicted_probs")
             if p and q:
                 shifts.append(distribution_shift(p, q))
+    lo, hi = wilson_interval(flips, pairs)
     return {
         "pairs": pairs,
+        "flips": flips,
         "branch_flip_rate": flips / pairs if pairs else 0.0,
+        "ci": (lo, hi),
         "mean_distribution_shift": round(statistics.mean(shifts), 4) if shifts else None,
         "flipped_groups": flipped_ids,
     }
@@ -228,8 +233,8 @@ def report(traces, tasks, title: str) -> dict:
         print(f"  {name:<12} schema adherence {a['adherence']:.3f} ({a['valid']}/{a['n']}){note}")
     stab = paraphrase_stability(traces, paraphrase_groups(tasks))
     print(
-        f"  paraphrase pairs: {stab['pairs']}  branch-flip rate {stab['branch_flip_rate']:.3f}  "
-        f"mean JS shift {stab['mean_distribution_shift']}"
+        f"  paraphrase pairs: {stab['pairs']}  branch-flip rate {stab['branch_flip_rate']:.3f} "
+        f"95% CI [{stab['ci'][0]:.3f}, {stab['ci'][1]:.3f}]  mean JS shift {stab['mean_distribution_shift']}"
     )
     if stab["flipped_groups"]:
         print(f"  flipped groups: {', '.join(stab['flipped_groups'])}")
@@ -272,19 +277,36 @@ def compare(baseline: Path, candidate: Path, tasks) -> None:
         print(f"  adherence {name:<12} {before:.3f} -> {after:.3f}{mark}")
     stab_a = paraphrase_stability(a, paraphrase_groups(tasks))
     stab_b = paraphrase_stability(b, paraphrase_groups(tasks))
-    mark = "  <-- REGRESSION" if stab_b["branch_flip_rate"] > stab_a["branch_flip_rate"] else ""
+    # Only call it a regression when the intervals do not overlap.
+    overlap = stab_a["ci"][1] >= stab_b["ci"][0] and stab_b["ci"][1] >= stab_a["ci"][0]
+    mark = "" if overlap else "  <-- REGRESSION"
     print(
-        f"  paraphrase flip rate   {stab_a['branch_flip_rate']:.3f} -> "
-        f"{stab_b['branch_flip_rate']:.3f}{mark}"
+        f"  paraphrase flip rate   {stab_a['branch_flip_rate']:.3f} "
+        f"[{stab_a['ci'][0]:.3f}, {stab_a['ci'][1]:.3f}] -> "
+        f"{stab_b['branch_flip_rate']:.3f} [{stab_b['ci'][0]:.3f}, {stab_b['ci'][1]:.3f}]{mark}"
     )
+    if overlap:
+        print("    (intervals overlap — not distinguishable at this sample size)")
 
     print("\n-- with ground truth (only available offline; confirms the above) --")
     acc_a = sum(bool(t.outcome_correct) for t in a) / len(a)
     acc_b = sum(bool(t.outcome_correct) for t in b) / len(b)
     print(f"  accuracy {acc_a:.3f} -> {acc_b:.3f}  (delta {acc_b - acc_a:+.3f})")
+
+    # Paired, because both runs saw the same items. Unpaired accuracy deltas on
+    # n=72 cannot separate a real change from one item moving.
+    verdict = paired_comparison([x.outcome_correct for x, _ in shared], [y.outcome_correct for _, y in shared])
+    print(
+        f"  paired test: {verdict['improvements']} improvements, {verdict['regressions']} regressions, "
+        f"{verdict['discordant']} discordant -> p={verdict['p_value']:.3f}"
+    )
+    print(f"  VERDICT: {verdict['verdict'].upper()}")
+    if verdict["discordant"] < verdict["min_discordant_needed"]:
+        print(
+            f"  (needed {verdict['min_discordant_needed']} same-direction changes to reach "
+            f"p<{verdict['alpha']}; this run had {verdict['discordant']} — it could not have concluded)"
+        )
     regressions = [(x, y) for x, y in flips if x.outcome_correct and not y.outcome_correct]
-    improvements = [(x, y) for x, y in flips if not x.outcome_correct and y.outcome_correct]
-    print(f"  of {len(flips)} changed decisions: {len(regressions)} regressions, {len(improvements)} improvements")
     for x, y in regressions[:6]:
         print(f"    {x.metadata['task_id']:<26} {x.action} -> {y.action}  (expected {x.metadata['expected']})")
 
