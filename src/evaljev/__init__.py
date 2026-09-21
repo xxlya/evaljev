@@ -10,6 +10,7 @@ from .attribution import (
 )
 from .budget import BudgetedJevClient, BudgetExceeded, SpendBudget
 from .client import JevHTTPClient
+from .drift import Window, count_windows, drift_report, time_windows, trend, window_metrics
 from .lint import LintIssue, lint_questions
 from .metrics import (
     branch_flip_rate,
@@ -39,7 +40,9 @@ from .repair import (
 )
 from .replay import replay, summarize_replay
 from .stats import (
+    compare_rates,
     exact_mcnemar,
+    fisher_exact_2x2,
     min_discordant_for_significance,
     min_samples_for_signed_rank,
     paired_comparison,
@@ -66,6 +69,7 @@ __all__ = [
     "QuestionSpec",
     "ReplayResult",
     "SpendBudget",
+    "Window",
     "action_mix",
     "answer_branch",
     "answer_distribution",
@@ -76,13 +80,17 @@ __all__ = [
     "brier_score",
     "calibration_probability",
     "calibration_report",
+    "compare_rates",
     "confidence_to_pmax",
+    "count_windows",
     "distribution_is_valid",
     "distribution_shift",
+    "drift_report",
     "evaluate_candidate",
     "evaluate_candidate_paired",
     "exact_mcnemar",
     "expected_calibration_error",
+    "fisher_exact_2x2",
     "lint_questions",
     "min_discordant_for_significance",
     "min_samples_for_signed_rank",
@@ -101,9 +109,12 @@ __all__ = [
     "stability_check",
     "state_diff",
     "summarize_replay",
+    "time_windows",
+    "trend",
     "validate_candidate",
     "vendor_drift_check",
     "version_diff",
     "wilcoxon_signed_rank",
     "wilson_interval",
+    "window_metrics",
 ]

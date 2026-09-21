@@ -82,6 +82,54 @@ def min_discordant_for_significance(alpha: float = 0.05) -> int:
     return d
 
 
+def fisher_exact_2x2(a: int, b: int, c: int, d: int) -> float:
+    """Two-sided Fisher exact test on a 2x2 table [[a, b], [c, d]].
+
+    Windows of traffic are **not** paired — they are different requests — so the
+    paired tests used for replay do not apply to them. This is exact rather than
+    chi-square because a window can easily be small, and the approximation is
+    worst exactly there.
+    """
+    if min(a, b, c, d) < 0:
+        raise ValueError("counts must not be negative")
+    row1, row2 = a + b, c + d
+    col1, total = a + c, a + b + c + d
+    if total == 0 or row1 == 0 or row2 == 0 or col1 == 0 or (a + b + c + d) == col1:
+        return 1.0
+
+    def table_p(x: int) -> float:
+        return comb(row1, x) * comb(row2, col1 - x) / comb(total, col1)
+
+    observed = table_p(a)
+    lo = max(0, col1 - row2)
+    hi = min(col1, row1)
+    # Sum every table at least as extreme as the observed one.
+    total_p = sum(
+        p for x in range(lo, hi + 1) if (p := table_p(x)) <= observed * (1 + 1e-9)
+    )
+    return min(1.0, total_p)
+
+
+def compare_rates(
+    successes_a: int, n_a: int, successes_b: int, n_b: int, *, alpha: float = 0.05
+) -> dict:
+    """Compare two independent rates, with intervals and an exact test."""
+    lo_a, hi_a = wilson_interval(successes_a, n_a)
+    lo_b, hi_b = wilson_interval(successes_b, n_b)
+    rate_a = successes_a / n_a if n_a else 0.0
+    rate_b = successes_b / n_b if n_b else 0.0
+    p = fisher_exact_2x2(successes_a, n_a - successes_a, successes_b, n_b - successes_b)
+    return {
+        "reference": {"rate": rate_a, "n": n_a, "ci": (lo_a, hi_a)},
+        "current": {"rate": rate_b, "n": n_b, "ci": (lo_b, hi_b)},
+        "delta": rate_b - rate_a,
+        "p_value": p,
+        "alpha": alpha,
+        "changed": p < alpha,
+        "intervals_overlap": hi_a >= lo_b and hi_b >= lo_a,
+    }
+
+
 def min_samples_for_signed_rank(alpha: float = 0.05) -> int:
     """Smallest number of moved items the signed-rank test could ever call significant.
 

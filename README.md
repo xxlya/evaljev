@@ -25,6 +25,7 @@ Failures can come from the model, question schema, state construction, threshold
 - **Threshold optimization**: choose a binary operating point from labeled outcomes and asymmetric costs.
 - **Decision schema linting**: flags underspecified, subjective, composite, duplicate, and missing-fallback schemas.
 - **Decision replay**: rerun historical traces through a new model/question/policy, with a paired test that says whether the difference is real.
+- **Drift detection**: window a trace stream, test the newest window against the pooled baseline, and refuse to compare windows that are not composition-comparable.
 - **Failure attribution**: diff two windows of traffic and name the component that changed — schema, option set, policy, model, or inputs.
 - **Repair proposal**: generate candidate schemas from observed failures, then gate them on a held-out replay against a contemporaneous control. Proposes; never applies.
 - **Spend ceilings**: a per-API USD cap that refuses the call which would breach it, so an evaluation loop cannot drain an account.
@@ -299,7 +300,45 @@ never sent. The library only ever receives USD amounts — provider rate cards s
 in your code. For providers that do not report cost, charge a conservative upper
 bound (see `estimate_llm_cost` in `examples/mvp_demo.py`).
 
-## 7. Attribute a change to a component
+## 7. Watch for drift over time
+
+`attribute` compares two windows you already chose, having already noticed
+something was wrong. Monitoring is the other way round: the unit is a delta
+against a baseline, and the first job is **noticing**.
+
+```python
+from datetime import timedelta
+from evaljev import drift_report
+
+report = drift_report(store.list("research-agent"), window=timedelta(hours=1))
+print(report["signals"])
+print(report["next_step"])
+for row in report["series"]:
+    print(row["index"], row["n"], row["action_mix"], row["accuracy"])
+```
+
+Windows are cut by duration (`window=`) or by trace count (`size=`), and the
+newest is compared against every earlier one pooled. Windows are **not paired** —
+they are different traffic — so comparisons use exact tests for independent
+samples (Fisher), not the paired tests replay uses. The `series` is returned so a
+trend is visible even when no single step trips a threshold.
+
+Two guards exist because live traces showed the report is misleading without them:
+
+- **`comparable`** is checked first. If the windows carry different mixes of
+  decision nodes, they are not samples of the same thing, and nothing else can be
+  read as deployment drift. Traffic ordered by type — a benchmark sweep, a nightly
+  batch — breaks this silently. On the real JevBench stream this fires
+  (`composition_shift 0.678`) and the report says *compare like with like* instead
+  of pretending to have found something.
+- **Action shares are tested, not thresholded.** A JS distance on a ten-trace
+  window is large whatever the deployment is doing. `action_mix_shift` is reported
+  as a description; the signal that fires is `moved_actions`, where each action's
+  share gets its own exact test. On one real window that distinction was the
+  difference between a reported `0.553 shift` and the correct answer of *no
+  established change*.
+
+## 8. Attribute a change to a component
 
 A deployed decision has five moving parts: state construction, the question schema,
 the model, the policy/threshold, and the downstream action. When behaviour moves,
@@ -345,7 +384,7 @@ drift in the traffic — same keys, same size, different subject matter — whic
 an embedding of the state. A clean state report is not evidence that inputs are
 unchanged.
 
-## 8. Propose a repair, and refuse to believe it without evidence
+## 9. Propose a repair, and refuse to believe it without evidence
 
 `propose -> validate -> screen -> verify -> approve`. Only the first step uses a
 language model; everything after it is deterministic, because the output is a change
@@ -447,7 +486,7 @@ Application
 ## What I would build next
 
 1. OpenTelemetry exporter + Langfuse/LangSmith-compatible trace bridge.
-2. SQLite/Postgres trace store with immutable events and outcome joins.
+2. SQLite/Postgres trace store with immutable events and outcome joins, so drift windows do not have to fit in memory.
 3. Workflow graph representation, so attribution can cross node boundaries instead of stopping at one decision.
 4. Dataset runner with semantic perturbation generators.
 5. Threshold repair to sit alongside the schema repair, and a multi-round loop that re-proposes from what the last gate rejected.
