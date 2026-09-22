@@ -82,7 +82,7 @@ def test_demo_renders_from_the_bundled_run(tmp_path):
     out = tmp_path / "demo.html"
     assert main(["demo", "-o", str(out)]) == 0
     assert out.stat().st_size > 20_000
-    assert len(_sample_traces()) == 168
+    assert len(_sample_traces()) == 351
 
 
 def test_unsure_threshold_reaches_the_report(tmp_path, traces_file):

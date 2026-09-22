@@ -309,3 +309,19 @@ def test_a_significant_but_meaningless_certainty_move_is_suppressed():
     assert report["certainty"]["median_shift"] < 0.05
     assert report["certainty"]["moved"] is False     # ...by nothing worth reporting
     assert not any("certainty moved" in s for s in report["signals"])
+
+
+def test_the_newest_window_is_never_a_remainder():
+    """117 traces at size 29 must not leave one decision as the window under test."""
+    rows = [trace(minutes=m) for m in range(117)]
+    windows = count_windows(rows, size=29, align="end")
+    assert [len(w) for w in windows] == [1, 29, 29, 29, 29]
+    # ...and the drift report uses that alignment, so the comparison has power.
+    report = drift_report(rows, size=29)
+    assert report["current"]["n"] == 29
+
+
+def test_start_aligned_windowing_is_still_available():
+    rows = [trace(minutes=m) for m in range(25)]
+    assert [len(w) for w in count_windows(rows, size=10)] == [10, 10, 5]
+    assert [len(w) for w in count_windows(rows, size=10, align="end")] == [5, 10, 10]

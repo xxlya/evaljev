@@ -67,6 +67,13 @@ class Monitor:
         answer_map = {a.question_name: a for a in answers}
         action = policy(answer_map) if policy else None
         model = response.get("model") or getattr(client, "model", None)
+        # The API returns the exact billed amount per call. Recording it here means
+        # every trace can answer "what is this workflow costing" without the caller
+        # remembering to plumb it through. A caller's own value always wins.
+        meta = dict(metadata or {})
+        cost = (response.get("usage") or {}).get("cost_usd")
+        if cost is not None and "cost_usd" not in meta:
+            meta["cost_usd"] = cost
         trace = DecisionTrace(
             workflow_id=workflow_id,
             node_id=node_id,
@@ -80,7 +87,7 @@ class Monitor:
             answers=answers,
             latency_ms=latency_ms,
             action=action,
-            metadata=metadata or {},
+            metadata=meta,
         )
         self.store.append(trace)
         return response, trace

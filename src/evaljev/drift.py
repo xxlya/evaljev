@@ -63,18 +63,36 @@ def time_windows(traces: Iterable[DecisionTrace], *, window: timedelta) -> list[
     return out
 
 
-def count_windows(traces: Iterable[DecisionTrace], *, size: int) -> list[Window]:
+def count_windows(
+    traces: Iterable[DecisionTrace], *, size: int, align: str = "start"
+) -> list[Window]:
     """Cut the stream into fixed-size windows, oldest first.
 
     Useful when traffic is bursty and clock time says more about business hours
     than about the deployment.
+
+    ``align`` decides where the remainder goes, and for monitoring it is not a
+    detail. Chopping from the oldest trace forward leaves the leftovers in the
+    *newest* window — 117 traces at size 29 ends with a window of one, and the
+    comparison that matters is then a single decision against everything before
+    it. ``align="end"`` measures back from the newest trace instead, so the
+    current window is always full and the remainder lands in the oldest window,
+    where it is pooled into the baseline.
     """
     if size < 1:
         raise ValueError("size must be at least 1")
+    if align not in ("start", "end"):
+        raise ValueError("align must be 'start' or 'end'")
     rows = _sorted(traces)
+    if not rows:
+        return []
+    bounds = list(range(0, len(rows), size))
+    if align == "end":
+        remainder = len(rows) % size
+        bounds = ([0] if remainder else []) + list(range(remainder, len(rows), size))
     out = []
-    for i, start in enumerate(range(0, len(rows), size)):
-        chunk = rows[start : start + size]
+    for i, start in enumerate(bounds):
+        chunk = rows[start : bounds[i + 1] if i + 1 < len(bounds) else len(rows)]
         out.append(Window(i, chunk[0].timestamp, chunk[-1].timestamp, chunk))
     return out
 
@@ -154,7 +172,13 @@ def drift_report(
     """
     if (window is None) == (size is None):
         raise ValueError("pass exactly one of window= or size=")
-    windows = time_windows(traces, window=window) if window else count_windows(traces, size=size)
+    # Aligned to the end: the newest window is the one under test, and a partial
+    # one makes the whole report underpowered for no reason.
+    windows = (
+        time_windows(traces, window=window)
+        if window
+        else count_windows(traces, size=size, align="end")
+    )
     if len(windows) < 2:
         return {
             "windows": len(windows),

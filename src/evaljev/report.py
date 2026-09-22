@@ -30,6 +30,7 @@ from .lint import lint_questions
 from .metrics import (
     calibration_bins,
     calibration_report,
+    declared_label_sets,
     schema_adherence,
 )
 from .models import DecisionTrace, QuestionSpec, answer_branch, answer_distribution
@@ -46,6 +47,19 @@ __all__ = [
 # A check is one row on the page: a question in plain words, a verdict, and a
 # next step. Severity orders them and drives the headline.
 SEVERITY = {"ok": 0, "info": 0, "unknown": 1, "watch": 2, "problem": 3}
+
+# Within one severity, the order a reader should take them in: what moved, then
+# whether the answers are usable, then the slower-burning ones.
+CHECK_ORDER = [
+    "drift",
+    "valid_answers",
+    "certainty",
+    "consistency",
+    "calibration",
+    "outcomes",
+    "wording",
+    "config",
+]
 
 #: Every term the page uses that a reader might not know, in one sentence each.
 #: The page renders these as hover definitions, so no jargon appears undefined.
@@ -77,24 +91,6 @@ GLOSSARY = {
     "statistically real": "Unlikely to be a coincidence of small numbers. EvalJev "
     "uses exact tests, so a change only counts once the evidence supports it.",
 }
-
-
-def declared_label_sets(traces: Sequence[DecisionTrace]) -> dict[str, list[str]]:
-    """The exact label set each question declared, keyed by question name.
-
-    Choice questions declare theirs as the keys of ``criteria``; score questions as
-    the positions of a criteria list. Noul questions are left out on purpose: the
-    API answers them with a bare probability and no distribution, so scoring them
-    for schema adherence would report a correct answer as a schema failure.
-    """
-    labels: dict[str, list[str]] = {}
-    for trace in traces:
-        for q in trace.questions:
-            if q.type == "choice" and isinstance(q.criteria, Mapping):
-                labels[q.name] = sorted(str(k) for k in q.criteria)
-            elif q.type == "score" and isinstance(q.criteria, (list, tuple)):
-                labels[q.name] = [str(i) for i in range(len(q.criteria))]
-    return labels
 
 
 def _certainty(ans) -> float | None:
@@ -138,7 +134,26 @@ def _ci_text(row: Mapping[str, Any]) -> str:
 
 
 def _short(value: Any, limit: int = 180) -> str:
-    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    """A state as a person would read it, not as a serializer would write it.
+
+    A dict of inputs renders as ``message: where is my parcel · channel: email``,
+    longest text first, because that is what a reader scans for. JSON braces,
+    quotes and ``\u2014`` escapes carry no information here and cost the reader
+    the only thing this line has to do.
+    """
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, Mapping):
+        parts = sorted(
+            value.items(),
+            key=lambda kv: -len(str(kv[1])) if isinstance(kv[1], str) else 0,
+        )
+        text = " · ".join(
+            f"{k}: {v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str)}"
+            for k, v in parts
+        )
+    else:
+        text = json.dumps(value, ensure_ascii=False, default=str)
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
@@ -156,8 +171,11 @@ def _latest_questions(traces: Sequence[DecisionTrace]) -> list[QuestionSpec]:
 # --------------------------------------------------------------------------- #
 
 
-def _check_valid_answers(traces, labels) -> dict:
-    stats = schema_adherence(traces, labels)
+def _check_valid_answers(traces) -> dict:
+    # No label map: a stream being monitored is exactly the stream whose schema
+    # changed, and one global map would score every earlier answer against a label
+    # that did not exist yet.
+    stats = schema_adherence(traces)
     total = sum(row["n"] for row in stats.values())
     valid = sum(row["valid"] for row in stats.values())
     reasons: dict[str, int] = {}
@@ -297,12 +315,27 @@ def _check_repeat_consistency(traces) -> dict:
         }
     flipped = []
     for (node, state, _version, _schema), rows in repeats.items():
-        branches = {
-            r.action if r.action is not None else tuple(answer_branch(a) for a in r.answers)
-            for r in rows
-        }
-        if len(branches) > 1:
-            flipped.append({"node_id": node, "state": _short(json.loads(state)), "n": len(rows)})
+        seen: list[str] = []
+        for row in rows:
+            branch = row.action if row.action is not None else "/".join(
+                str(answer_branch(a)) for a in row.answers
+            )
+            if branch not in seen:
+                seen.append(branch)
+        if len(seen) > 1:
+            flipped.append(
+                {
+                    "node_id": node,
+                    "state": _short(json.loads(state)),
+                    "n": len(rows),
+                    "branches": seen,
+                    "certainties": [
+                        round(c, 2)
+                        for c in (_decision_certainty(r) for r in rows)
+                        if c is not None
+                    ],
+                }
+            )
     rate = _rate(len(flipped), len(repeats))
     status = "ok" if not flipped else "watch" if rate["rate"] < 0.05 else "problem"
     return {
@@ -315,7 +348,12 @@ def _check_repeat_consistency(traces) -> dict:
         + (
             f"All of them decided the same way every time ({_ci_text(rate)} flipped)."
             if not flipped
-            else f"{len(flipped)} decided differently on different occasions — {_ci_text(rate)}."
+            else f"{len(flipped)} decided differently on different occasions — "
+            f"{_ci_text(rate)}. "
+            + "; ".join(
+                f"{row['node_id']} chose {' then '.join(row['branches'])}" for row in flipped[:2]
+            )
+            + "."
         ),
         "advice": (
             "Good, but note this only covers inputs that happened to repeat."
@@ -327,20 +365,83 @@ def _check_repeat_consistency(traces) -> dict:
     }
 
 
-def _translate_signal(signal: str) -> str:
-    """Rewrite a drift signal into something a reader can act on."""
-    if signal.startswith("action share changed"):
-        return "Answers shifted: " + signal.split(":", 1)[1].strip()
-    if signal.startswith("certainty moved"):
-        return "The model got less sure of itself — " + signal[len("certainty moved: ") :]
-    if signal.startswith("accuracy"):
-        return "Accuracy moved — " + signal
-    if signal.startswith("schema adherence"):
-        return "Answers stopped fitting the declared options — " + signal
-    return signal
+def _p(value: float) -> str:
+    return "p<0.001" if value < 0.001 else f"p={value:.3f}"
 
 
-def _check_drift(traces, labels, *, window_size: int | None) -> dict:
+def _plain_signals(report: Mapping[str, Any]) -> list[str]:
+    """What moved, in the words a reader would use.
+
+    Built from the tested numbers rather than by rewriting the strings
+    ``drift_report`` prints for a console, so the page and the library cannot
+    drift apart in wording or in rounding.
+    """
+    out: list[str] = []
+    for action in report["moved_actions"]:
+        test = report["action_tests"][action]
+        before, after = test["reference"]["rate"], test["current"]["rate"]
+        direction = "up from" if after > before else "down from"
+        out.append(
+            f"\u201c{action}\u201d is now {_pct(after)} of decisions, {direction} "
+            f"{_pct(before)} ({_p(test['p_value'])})"
+        )
+    certainty = report.get("certainty") or {}
+    if certainty.get("moved"):
+        out.append(
+            f"typical certainty fell from {certainty['median_a']:.2f} to "
+            f"{certainty['median_b']:.2f} ({_p(certainty['p_value'])})"
+        )
+    accuracy = report.get("accuracy")
+    if accuracy and accuracy["changed"]:
+        before, after = accuracy["reference"]["rate"], accuracy["current"]["rate"]
+        verb = "rose" if after > before else "fell"
+        out.append(
+            f"accuracy on the decisions someone reviewed {verb} from {_pct(before)} to "
+            f"{_pct(after)} ({_p(accuracy['p_value'])})"
+        )
+    for question, row in (report.get("adherence") or {}).items():
+        if row["changed"]:
+            out.append(
+                f"answers on \u201c{question}\u201d stopped fitting the declared options: "
+                f"{_pct(row['reference']['rate'])} \u2192 {_pct(row['current']['rate'])}"
+            )
+    return out or list(report["signals"])
+
+
+def _plain_finding(finding: Mapping[str, Any]) -> str:
+    """An attribution finding as prose, built from its evidence.
+
+    Reading the structured evidence rather than the printed summary keeps the
+    sentence short: a window that straddles two versions lists three of them in
+    the summary, and what a reader needs is which one is in force now.
+    """
+    evidence = finding.get("evidence") or {}
+    component, summary = finding.get("component"), finding.get("summary", "")
+
+    if component in ("model", "question", "policy", "workflow") and "field" in evidence:
+        field = str(evidence["field"]).replace("_", " ")
+        current, reference = evidence.get("current") or [], evidence.get("reference") or []
+        if current:
+            was = [v for v in reference if v not in current]
+            return f"{field} is now {current[-1]}" + (f" (was {was[-1]})" if was else "")
+    if summary.endswith("instructions rewritten"):
+        question = evidence.get("question", "this question")
+        return f"the instructions for \u201c{question}\u201d were rewritten"
+    if "criteria reworded" in summary:
+        labels = evidence.get("labels") or []
+        question = evidence.get("question", "this question")
+        return (
+            f"{len(labels)} option descriptions on \u201c{question}\u201d were reworded "
+            "\u2014 the labels themselves are unchanged"
+        )
+    if "option set changed" in summary:
+        return summary.replace("option set changed, k", "option count changed from").replace(
+            " -> ", " to "
+        )
+    return summary
+
+
+def _check_drift(traces, *, window_size: int | None) -> dict:
     """Is the newest traffic at each decision point behaving like the older traffic?
 
     Drift is tested **per decision point**, never across the whole stream. Two
@@ -357,18 +458,23 @@ def _check_drift(traces, labels, *, window_size: int | None) -> dict:
     nodes, drifted_nodes, untestable = [], [], []
     for node in sorted(by_node):
         rows = by_node[node]
-        size = window_size or max(5, len(rows) // 4)
+        # Eight a side is the floor the certainty test needs before its p-value is
+        # worth reading, so windows never go below it however thin the traffic is.
+        size = window_size or max(8, len(rows) // 4)
         if len(rows) < 2 * size:
             untestable.append({"node_id": node, "n": len(rows), "need": 2 * size})
             continue
-        report = drift_report(rows, size=size, labels=labels)
+        report = drift_report(rows, size=size)
+        current = count_windows(rows, size=size, align="end")[-1]
         entry = {
             "node_id": node,
             "n": len(rows),
             "window_size": size,
+            "current_from": current.start.isoformat(),
+            "current_trace_ids": [t.trace_id for t in current.traces],
             "windows": report["windows"],
             "drifted": report["drifted"],
-            "signals": [_translate_signal(s) for s in report["signals"]],
+            "signals": _plain_signals(report),
             "moved_actions": report["moved_actions"],
             "next_step": report["next_step"],
             "changed_components": report["attribution"]["changed_components"],
@@ -556,23 +662,35 @@ def _check_wording(traces) -> dict:
 
 
 def _check_config(traces) -> dict:
+    """Did anything about the setup move while this traffic was being served?
+
+    Tracked per decision point, not per stream. Each node asks its own question
+    with its own version, so pooling them produces a sequence of changes that
+    never happened — and hides which node the change belongs to.
+    """
     axes = {
-        "model": "model version",
-        "question_version": "question version",
-        "policy_version": "policy version",
-        "workflow_version": "workflow version",
+        "model": "model",
+        "question_version": "question wording",
+        "policy_version": "policy",
+        "workflow_version": "workflow",
     }
-    changed = {}
-    for attr, label in axes.items():
-        # In first-seen order, not sorted: the arrow in the detail line reads as a
-        # sequence, and alphabetical order would invent a history that did not happen.
-        seen: list[str] = []
-        for trace in traces:
-            value = getattr(trace, attr)
-            if value is not None and value not in seen:
-                seen.append(value)
-        if len(seen) > 1:
-            changed[label] = seen
+    by_node: dict[str, list[DecisionTrace]] = {}
+    for trace in traces:
+        by_node.setdefault(trace.node_id, []).append(trace)
+
+    changed: list[dict] = []
+    for node in sorted(by_node):
+        for attr, label in axes.items():
+            # First-seen order, not sorted: the arrow reads as a sequence, and
+            # alphabetical order would invent a history.
+            seen: list[str] = []
+            for trace in by_node[node]:
+                value = getattr(trace, attr)
+                if value is not None and value not in seen:
+                    seen.append(value)
+            if len(seen) > 1:
+                changed.append({"node_id": node, "axis": label, "versions": seen})
+
     if not changed:
         return {
             "id": "config",
@@ -580,8 +698,8 @@ def _check_config(traces) -> dict:
             "question": "Did the model, wording, options or policy change mid-stream?",
             "status": "ok",
             "value": "unchanged",
-            "detail": "One model version, one question version, one policy version "
-            "across this whole window.",
+            "detail": "One model version, one question version and one policy version "
+            "at every decision point across this whole window.",
             "advice": "This is what makes the comparisons above meaningful: anything "
             "that moved, moved on its own.",
             "evidence": {},
@@ -591,10 +709,13 @@ def _check_config(traces) -> dict:
         "title": "Configuration changed mid-stream",
         "question": "Did the model, wording, options or policy change mid-stream?",
         "status": "info",
-        "value": f"{len(changed)} axis changed",
-        "detail": "; ".join(f"{k}: {' → '.join(v)}" for k, v in changed.items()),
+        "value": f"{len(changed)} change(s)",
+        "detail": "; ".join(
+            f"{row['node_id']} {row['axis']}: {' → '.join(row['versions'])}" for row in changed[:3]
+        )
+        + ("…" if len(changed) > 3 else ""),
         "advice": "Not a fault — but any behaviour change in this window has a candidate "
-        "cause, and before/after comparisons that straddle the switch are comparing two "
+        "cause, and a before/after comparison that straddles the switch is comparing two "
         "different systems.",
         "evidence": {"changed": changed},
     }
@@ -670,11 +791,11 @@ def _certainty_histogram(traces, bins: int = 20) -> list[dict]:
     return rows
 
 
-def _node_rows(traces, labels) -> list[dict]:
+def _node_rows(traces) -> list[dict]:
     by_node: dict[str, list[DecisionTrace]] = {}
     for trace in traces:
         by_node.setdefault(trace.node_id, []).append(trace)
-    adherence = schema_adherence(traces, labels)
+    adherence = schema_adherence(traces)
     rows = []
     for node in sorted(by_node):
         group = by_node[node]
@@ -731,6 +852,266 @@ def _volume_series(traces, *, buckets: int = 24, unsure_below: float) -> list[di
     return out
 
 
+def _request_groups(traces, request_key: str) -> dict[str, list[DecisionTrace]]:
+    """Decisions grouped into the request that produced them, in the order taken.
+
+    A workflow makes several decisions per request, and reading them as unrelated
+    rows loses the thing an engineer actually wants: the path one request took.
+    Grouping needs an id shared across the nodes — by convention
+    ``metadata["request_id"]`` — and without one this returns nothing rather than
+    guessing, because guessing would invent a workflow that does not exist.
+    """
+    groups: dict[str, list[DecisionTrace]] = {}
+    for trace in traces:
+        value = trace.metadata.get(request_key) if isinstance(trace.metadata, dict) else None
+        if value is None:
+            continue
+        groups.setdefault(str(value), []).append(trace)
+    for rows in groups.values():
+        rows.sort(key=lambda t: t.timestamp)
+    return groups
+
+
+def _step(trace: DecisionTrace, unsure_below: float) -> dict:
+    certainty = _decision_certainty(trace)
+    answer = trace.answers[0] if trace.answers else None
+    dist = answer_distribution(answer) if answer else None
+    return {
+        "node_id": trace.node_id,
+        "question": answer.question_name if answer else None,
+        "type": answer.type if answer else None,
+        "branch": trace.action if trace.action is not None else (answer_branch(answer) if answer else None),
+        "certainty": certainty,
+        "unsure": certainty is not None and certainty < unsure_below,
+        "latency_ms": round(trace.latency_ms) if trace.latency_ms else None,
+        "outcome_correct": trace.outcome_correct,
+        "version": trace.question_version,
+        "top": sorted((dist or {}).items(), key=lambda kv: -kv[1])[:4],
+    }
+
+
+def _trajectory(request_id: str, rows: Sequence[DecisionTrace], unsure_below: float) -> dict:
+    steps = [_step(t, unsure_below) for t in rows]
+    outcomes = [t.outcome_correct for t in rows if t.outcome_correct is not None]
+    return {
+        "request_id": request_id,
+        "time": rows[0].timestamp.isoformat(),
+        "input": _short(rows[0].state, 220),
+        "steps": steps,
+        "final_action": steps[-1]["branch"] if steps else None,
+        "unsure_steps": sum(1 for s in steps if s["unsure"]),
+        "outcome_correct": (all(outcomes) if outcomes else None),
+    }
+
+
+def _workflow_path(traces, groups) -> list[dict]:
+    """The decision points in the order a request meets them."""
+    position: dict[str, list[int]] = {}
+    for rows in groups.values():
+        for i, trace in enumerate(rows):
+            position.setdefault(trace.node_id, []).append(i)
+    by_node: dict[str, list[DecisionTrace]] = {}
+    for trace in traces:
+        by_node.setdefault(trace.node_id, []).append(trace)
+
+    def order(node: str) -> tuple:
+        seen = position.get(node)
+        if seen:
+            return (0, statistics.median(seen), node)
+        first = min(t.timestamp for t in by_node[node])
+        return (1, first.timestamp(), node)
+
+    path = []
+    for node in sorted(by_node, key=order):
+        rows = by_node[node]
+        certainties = [c for c in (_decision_certainty(t) for t in rows) if c is not None]
+        answer = rows[-1].answers[0] if rows[-1].answers else None
+        path.append(
+            {
+                "node_id": node,
+                "question": answer.question_name if answer else None,
+                "type": answer.type if answer else None,
+                "n": len(rows),
+                "median_certainty": statistics.median(certainties) if certainties else None,
+                "top_action": (
+                    max(action_mix(rows).items(), key=lambda kv: kv[1])[0] if rows else None
+                ),
+            }
+        )
+    return path
+
+
+def _same_input_comparisons(traces, drift_check, unsure_below: float, limit: int = 4) -> dict:
+    """The same input at a flagged decision point, before and after it was flagged.
+
+    This is the closest thing to a controlled experiment that live traffic offers:
+    identical state, identical node, one side of the window boundary each. It is
+    evidence, not a test — the two sides are not a random split — so it is presented
+    as examples and never as a verdict.
+    """
+    flagged = [n for n in drift_check["evidence"].get("nodes", []) if n["drifted"]]
+    if not flagged:
+        return {"pairs": [], "total": 0, "changed": 0}
+    out: list[dict] = []
+    for node in flagged:
+        current_ids = set(node["current_trace_ids"])
+        rows = [t for t in traces if t.node_id == node["node_id"]]
+        by_state: dict[str, dict[str, list[DecisionTrace]]] = {}
+        for trace in rows:
+            key = json.dumps(trace.state, sort_keys=True, default=str)
+            side = "after" if trace.trace_id in current_ids else "before"
+            by_state.setdefault(key, {"before": [], "after": []})[side].append(trace)
+        pairs = []
+        for key, sides in by_state.items():
+            if not sides["before"] or not sides["after"]:
+                continue
+            before, after = sides["before"][-1], sides["after"][-1]
+            pairs.append(
+                {
+                    "node_id": node["node_id"],
+                    "input": _short(json.loads(key), 200),
+                    "before": _step(before, unsure_below),
+                    "after": _step(after, unsure_below),
+                    "changed": (before.action != after.action),
+                }
+            )
+        # Changed decisions first: they are the ones worth a reader's attention.
+        pairs.sort(
+            key=lambda p: (
+                not p["changed"],
+                -abs((p["before"]["certainty"] or 0) - (p["after"]["certainty"] or 0)),
+            )
+        )
+        out += pairs
+    # The counts describe every pair found; only the examples are trimmed, because
+    # "6 of 6" from a truncated list would be a different and much stronger claim.
+    return {
+        "pairs": out[:limit],
+        "total": len(out),
+        "changed": sum(1 for p in out if p["changed"]),
+    }
+
+
+def _story(checks, drift, comparisons, findings, n_requests: int) -> dict:
+    """The two or three sentences a reader needs before any chart.
+
+    Built here rather than in the page, because it is a claim about the data and
+    claims belong where they can be tested. Every line is assembled from a check
+    that already ran; nothing here re-derives a number of its own.
+    """
+    flagged = [n for n in drift["evidence"].get("nodes", []) if n["drifted"]]
+    problems = [c for c in checks if c["status"] == "problem"]
+
+    if not flagged:
+        other = [c for c in problems if c["id"] != "drift"]
+        if other:
+            return {
+                "kind": "problem",
+                "headline": other[0]["title"],
+                "when": None,
+                "node_id": None,
+                "bullets": [{"label": c["title"], "text": c["detail"]} for c in other[:3]],
+            }
+        return {
+            "kind": "clean",
+            "headline": "Nothing has changed in how this workflow decides",
+            "when": None,
+            "node_id": None,
+            "bullets": [
+                {
+                    "label": "Compared",
+                    "text": drift["detail"],
+                },
+                {
+                    "label": "Worth remembering",
+                    "text": "A clean comparison is not proof the workflow is correct — it "
+                    "says nothing moved. Checks that could not run are listed as not measured.",
+                },
+            ],
+        }
+
+    node = flagged[0]
+    bullets = [{"label": "What moved", "text": "; ".join(node["signals"])}]
+
+    causes = [f for f in findings if f["node_id"] == node["node_id"]]
+    if causes:
+        bullets.append(
+            {
+                "label": "What changed underneath",
+                "text": "; ".join(dict.fromkeys(_plain_finding(f) for f in causes)),
+            }
+        )
+    else:
+        bullets.append(
+            {
+                "label": "What changed underneath",
+                "text": "Nothing recorded on the traces — the wording, the options, the "
+                "versions and the input shape are unchanged. That points outside your "
+                "config; vendor_drift_check() is the next step.",
+            }
+        )
+
+    if comparisons["changed"]:
+        landing: dict[str, int] = {}
+        for row in comparisons["pairs"]:
+            if row["changed"]:
+                landing[row["after"]["branch"]] = landing.get(row["after"]["branch"], 0) + 1
+        where = ", ".join(f"{k}" for k, _ in sorted(landing.items(), key=lambda kv: -kv[1]))
+        bullets.append(
+            {
+                "label": "What it did to requests",
+                "text": f"{comparisons['changed']} of the {comparisons['total']} inputs that "
+                f"arrived both before and after took a different branch the second time"
+                + (f", now going to {where}" if where else "")
+                + ". Same input, same workflow, different answer.",
+            }
+        )
+
+    return {
+        "kind": "incident",
+        "headline": f"{node['node_id']} started answering differently",
+        "when": node["current_from"],
+        "node_id": node["node_id"],
+        "bullets": bullets,
+    }
+
+
+def _select_trajectories(trajectories: Sequence[dict], limit: int = 8) -> list[dict]:
+    """A few requests worth opening: the ones that stalled, then ordinary ones.
+
+    A reader wants two things from this section — what a healthy path looks like,
+    and what the bad ones have in common. So the awkward requests come first and an
+    ordinary one is always kept, even when everything is on fire.
+    """
+    if not trajectories:
+        return []
+    ranked = sorted(
+        trajectories,
+        key=lambda t: (
+            -t["unsure_steps"],
+            t["outcome_correct"] is False and -1 or 0,
+            -(len(t["steps"])),
+        ),
+    )
+    # One entry per distinct input: the same message stalling three times is one
+    # fact, and three chips that read alike are harder to scan than three facts.
+    picked, seen_inputs = [], set()
+    for row in ranked:
+        if row["input"] in seen_inputs:
+            continue
+        seen_inputs.add(row["input"])
+        picked.append(row)
+        if len(picked) >= limit - 1:
+            break
+    ordinary = [
+        t for t in reversed(trajectories)
+        if t["unsure_steps"] == 0 and t["input"] not in seen_inputs
+    ]
+    if ordinary:
+        picked.append(ordinary[0])
+    return sorted(picked, key=lambda t: t["time"])
+
+
 def _decision_rows(traces, *, limit: int, unsure_below: float) -> list[dict]:
     rows = []
     for trace in sorted(traces, key=lambda t: t.timestamp, reverse=True)[:limit]:
@@ -779,6 +1160,7 @@ def build_report(
     live_interval_ms: int | None = None,
     links: Sequence[Mapping[str, str]] | None = None,
     note: str | None = None,
+    request_key: str = "request_id",
 ) -> dict:
     """Compute the whole monitoring report as one JSON-serializable dict.
 
@@ -786,6 +1168,12 @@ def build_report(
     human should see. It is deliberately a probability and not the API's
     ``confidence``, which rescales with the number of options, so the same
     threshold would mean different things for two questions.
+
+    ``request_key`` names the metadata field that ties the decisions of one
+    request together (``metadata={"request_id": ...}`` on every ``Monitor.run``).
+    With it the report can show the path a request took through the workflow
+    rather than a list of unrelated decisions; without it that section is simply
+    absent, since inferring the grouping would be inventing one.
     """
     rows = [t for t in traces if workflow_id is None or t.workflow_id == workflow_id]
     rows.sort(key=lambda t: t.timestamp)
@@ -796,16 +1184,16 @@ def build_report(
 
     labels = declared_label_sets(rows)
     checks = [
-        _check_valid_answers(rows, labels),
+        _check_valid_answers(rows),
         _check_certainty(rows, unsure_below),
-        _check_drift(rows, labels, window_size=window_size),
+        _check_drift(rows, window_size=window_size),
         _check_repeat_consistency(rows),
         _check_calibration(rows),
         _check_outcomes(rows),
         _check_wording(rows),
         _check_config(rows),
     ]
-    checks.sort(key=lambda c: (-SEVERITY[c["status"]], c["id"]))
+    checks.sort(key=lambda c: (-SEVERITY[c["status"]], CHECK_ORDER.index(c["id"])))
 
     problems = [c for c in checks if c["status"] == "problem"]
     watches = [c for c in checks if c["status"] == "watch"]
@@ -827,6 +1215,12 @@ def build_report(
 
     unknowns = [c for c in checks if c["status"] == "unknown"]
     drift = next(c for c in checks if c["id"] == "drift")
+    groups = _request_groups(rows, request_key)
+    trajectories = [
+        _trajectory(rid, group_rows, unsure_below)
+        for rid, group_rows in sorted(groups.items(), key=lambda kv: kv[1][0].timestamp)
+    ]
+    comparisons = _same_input_comparisons(rows, drift, unsure_below)
     # Every diff the traces support, not only the ones that moved behaviour. A
     # component that changed while behaviour held still is not a fault, but it is
     # the first thing anyone asks about when a number looks odd next week.
@@ -873,7 +1267,7 @@ def build_report(
         ],
         "certainty_histogram": _certainty_histogram(rows),
         "reliability": calibration_bins(rows),
-        "nodes": _node_rows(rows, labels),
+        "nodes": _node_rows(rows),
         "questions": [
             {
                 "name": q.name,
@@ -885,6 +1279,10 @@ def build_report(
             for q in _latest_questions(rows)
         ],
         "attribution": findings,
+        "story": _story(checks, drift, comparisons, findings, len(groups)),
+        "workflow": _workflow_path(rows, groups),
+        "trajectories": _select_trajectories(trajectories),
+        "comparisons": comparisons,
         "decisions": _decision_rows(rows, limit=recent, unsure_below=unsure_below),
         "glossary": GLOSSARY,
     }

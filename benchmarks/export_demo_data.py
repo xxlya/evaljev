@@ -1,16 +1,16 @@
-"""Export the published site from real traces, so it cannot drift from the run.
+"""Export the published site from real recorded traces, so it cannot drift from them.
 
-Three files, all generated, all computed by the library itself:
+Two generated pages plus one data file, all computed by the library itself:
 
-- ``docs/index.html`` — the monitoring dashboard, exactly what
-  ``evaljev report`` writes for anyone else's traces, rendered here from the
-  recorded JevBench runs.
-- ``docs/incident.html`` — the same dashboard on the one decision point where a
-  fault was deliberately injected, so the site shows a catch and not only a
-  clean bill of health.
-- ``docs/data.js`` — the measurements the "how it works" page walks through.
+- ``docs/index.html`` — the monitoring dashboard for the example support assistant
+  (``examples/support_assistant.py``), which is exactly what ``evaljev report``
+  writes for anyone else's traces.
+- ``docs/incident.html`` — a redirect, kept so an already-shared link still lands
+  somewhere useful.
+- ``docs/data.js`` — the measurements the "how it works" page walks through, from
+  the JevBench fixture runs.
 
-Regenerate after a new benchmark run:
+Regenerate after a new run:
 
     python benchmarks/export_demo_data.py
 """
@@ -35,22 +35,42 @@ from evaljev import (
     schema_adherence,
 )
 from evaljev.cli import _sample_traces
+from evaljev.store import latest_by_trace_id
 
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = "jevbench"
 OUT = REPO / "docs" / "data.js"
 DASHBOARD = REPO / "docs" / "index.html"
-INCIDENT = REPO / "docs" / "incident.html"
+REDIRECT = REPO / "docs" / "incident.html"
 
-# The runs the published pages are rendered from: the baseline sweep plus the three
-# deliberately degraded schema variants, in the order they were recorded.
-RUNS = ("jevbench-baseline", "jevbench-vague", "jevbench-stripped", "jevbench-rotated")
 LINKS = [
-    {"label": "Dashboard", "href": "./"},
-    {"label": "Failure example", "href": "incident.html"},
     {"label": "How it works", "href": "how-it-works.html"},
     {"label": "GitHub", "href": "https://github.com/xxlya/evaljev"},
 ]
+
+DEMO_NOTE = (
+    "<b>This is a live example.</b> A three-step support assistant, 351 real decisions "
+    "recorded against the Jev API — and two edits to one question along the way, the kind "
+    "nobody writes a test for. Everything below was computed from those traces; nothing is "
+    "mocked up and no model wrote any of it. The same page is one command away for your own "
+    "workflow: <code>evaljev report traces.jsonl -o report.html</code> · "
+    '<a href="how-it-works.html">How it works &rarr;</a>'
+)
+
+REDIRECT_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Moved — EvalJev</title>
+<meta http-equiv="refresh" content="0; url=./#caught">
+<link rel="canonical" href="./">
+</head>
+<body>
+<p>The caught-failure walkthrough is now part of the dashboard.
+<a href="./#caught">Continue &rarr;</a></p>
+</body>
+</html>
+"""
 
 # Measurements from live runs that are not recoverable from the stored traces.
 # Each is reproduced by a script under benchmarks/ or documented in the README.
@@ -121,85 +141,40 @@ def confidence_table(c: float = 0.55) -> list[dict]:
     return [{"k": k, "pmax": round(confidence_to_pmax(c, k), 4)} for k in (2, 3, 4, 5, 10)]
 
 
-def load_runs(node_id: str | None = None) -> list:
-    """The recorded runs, from the raw trace files or the copy inside the package.
-
-    ``benchmarks/*.jsonl`` is gitignored, so a fresh clone has no raw traces — but
-    the same run ships compressed inside the package for ``evaljev demo``. Falling
-    back to it means the published pages can be rebuilt from a clean checkout
-    instead of only on the machine that ran the benchmark.
-    """
+def load_support() -> list:
+    """The recorded example run, from ``examples/`` or from the packaged copy."""
     traces = []
-    for name in RUNS:
-        rows = JsonlTraceStore(REPO / "benchmarks" / f"{name}.jsonl").list(WORKFLOW)
-        traces += rows
+    for path in sorted((REPO / "examples").glob("support-v*.jsonl")):
+        traces += JsonlTraceStore(path).list()
     if not traces:
-        print("  no raw traces in benchmarks/ — using the run bundled with the package")
-        traces = [t for t in _sample_traces() if t.workflow_id == WORKFLOW]
-    return [t for t in traces if node_id is None or t.node_id == node_id]
-
-
-def _write(report, path: Path) -> None:
-    path.write_text(render_html(report), encoding="utf-8")
-    head = report["headline"]
-    print(f"wrote {path} ({path.stat().st_size // 1024} KB)")
-    print(f"  {report['meta']['n']} decisions · {head['status']} · score {head['score']}/100")
+        print("  no traces in examples/ — using the run bundled with the package")
+        traces = _sample_traces()
+    return latest_by_trace_id(traces)
 
 
 def write_dashboard() -> None:
     """Render the published dashboard with the same code path anyone else gets."""
     report = build_report(
-        load_runs(),
-        title="JevBench run — decision health",
-        links=[link for link in LINKS if link["label"] != "Dashboard"],
-        note=(
-            "<b>This is a live example.</b> Every number below was computed by EvalJev from "
-            "168 real decisions recorded against the Jev API — nothing here is mocked up, "
-            "including the fault in the last window of one decision point that the red check "
-            "found. The same page is one command away for your own workflow: "
-            "<code>evaljev report traces.jsonl -o report.html</code> \u00b7 "
-            "<a href=\"incident.html\">See what it caught &rarr;</a>"
-        ),
+        load_support(),
+        title="Support assistant — decision health",
+        links=LINKS,
+        note=DEMO_NOTE,
     )
-    _write(report, DASHBOARD)
-
-
-def write_incident() -> None:
-    """The same page, narrowed to the decision point where a fault was injected.
-
-    Three windows of twelve, in the order they were recorded: the original question,
-    a vaguely reworded one, and one whose five option descriptions were rotated a
-    position. ``window_size`` is pinned to 12 so each window is exactly one variant.
-    """
-    report = build_report(
-        load_runs(node_id="intent"),
-        title="Incident — a question that was reworded",
-        window_size=12,
-        links=[link for link in LINKS if link["label"] != "Failure example"],
-        note=(
-            "<b>What a caught failure looks like.</b> One decision point, 36 real decisions, "
-            "three windows of twelve: the original question, a vaguely reworded one, and one "
-            "whose five option descriptions were each shifted a position — same labels, same "
-            "option count, same instructions. No schema check can see that, and every answer "
-            "that came back was valid. Read the checks in order: the model stayed inside its "
-            "schema, got far less sure of itself (which needs no labels), and the diff names "
-            "the wording change. The accuracy column, which you would not have in production, "
-            "only confirms it afterwards."
-        ),
-    )
-    _write(report, INCIDENT)
+    DASHBOARD.write_text(render_html(report), encoding="utf-8")
+    REDIRECT.write_text(REDIRECT_HTML, encoding="utf-8")
+    head = report["headline"]
+    print(f"wrote {DASHBOARD} ({DASHBOARD.stat().st_size // 1024} KB)")
+    print(f"  {report['meta']['n']} decisions · {head['status']} · score {head['score']}/100")
+    print(f"  {head['summary'][:96]}")
 
 
 def main() -> int:
     write_dashboard()
-    write_incident()
 
     baseline = JsonlTraceStore(REPO / "benchmarks" / "jevbench-baseline.jsonl").list(WORKFLOW)
     vague = JsonlTraceStore(REPO / "benchmarks" / "jevbench-vague.jsonl").list(WORKFLOW)
     if not baseline:
-        # The dashboards rebuild from the packaged run; data.js needs the raw files,
-        # because it reports per-run measurements the bundle does not separate.
-        print(f"skipped {OUT} — no raw traces. Run benchmarks/run_jevbench.py to refresh it.")
+        print(f"skipped {OUT} — no JevBench traces. Run benchmarks/run_jevbench.py to refresh it.")
         return 0
 
     labels = {t.metadata["family"]: t.metadata["labels"] for t in baseline}
@@ -232,11 +207,7 @@ def main() -> int:
     for t in baseline:
         by_group.setdefault(t.metadata["group"], []).append(t)
     pairs = {g: rows for g, rows in by_group.items() if len(rows) > 1}
-    flipped = [
-        g
-        for g, rows in pairs.items()
-        if len({r.action for r in rows}) > 1
-    ]
+    flipped = [g for g, rows in pairs.items() if len({r.action for r in rows}) > 1]
 
     intent_only = [t for t in baseline + vague if t.metadata["family"] == "intent"]
     drift_all = drift_report(baseline + vague, size=36, labels=labels)
@@ -307,9 +278,10 @@ def main() -> int:
         encoding="utf-8",
     )
     print(f"wrote {OUT} ({OUT.stat().st_size} bytes)")
-    print(f"  {data['overall']['correct']}/{data['overall']['n']} correct, "
-          f"{len(families)} families, {len(pairs)} paraphrase pairs, "
-          f"{len(flipped)} flip(s)")
+    print(
+        f"  {data['overall']['correct']}/{data['overall']['n']} correct, "
+        f"{len(families)} families, {len(pairs)} paraphrase pairs, {len(flipped)} flip(s)"
+    )
     return 0
 
 

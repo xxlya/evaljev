@@ -160,28 +160,68 @@ def distribution_is_valid(
     return True, None
 
 
+def declared_labels(question) -> list[str] | None:
+    """The exact label set a question declared, or None if it declares none.
+
+    Choice questions declare theirs as the keys of ``criteria``, score questions as
+    the positions of a criteria list. Noul declares none: the API answers it with a
+    bare probability and no distribution, so scoring it here would report a correct
+    answer as a schema violation.
+    """
+    if question.type == "choice" and isinstance(question.criteria, Mapping):
+        return sorted(str(k) for k in question.criteria)
+    if question.type == "score" and isinstance(question.criteria, (list, tuple)):
+        return [str(i) for i in range(len(question.criteria))]
+    return None
+
+
+def declared_label_sets(traces: Iterable[DecisionTrace]) -> dict[str, list[str]]:
+    """The most recent label set seen for each question name."""
+    labels: dict[str, list[str]] = {}
+    for trace in traces:
+        for q in trace.questions:
+            declared = declared_labels(q)
+            if declared is not None:
+                labels[q.name] = declared
+    return labels
+
+
 def schema_adherence(
     traces: Iterable[DecisionTrace],
-    labels: Mapping[str, Sequence[str]],
+    labels: Mapping[str, Sequence[str]] | None = None,
     *,
     tol: float = 1e-3,
 ) -> dict:
     """Per-question rate of answers that are valid distributions over their labels.
 
-    ``labels`` maps a question name to the exact label set it declared. Questions
-    absent from the map are skipped; answers with no distribution count as invalid,
-    since a missing distribution is itself a schema failure.
+    ``labels`` maps a question name to the exact label set it declared. Pass it when
+    you want every answer held to one fixed contract; **leave it out on a stream
+    whose schema changed**, and each answer is checked against the option set its
+    own trace recorded. One global map cannot describe a stream where someone added
+    an option halfway through — every earlier answer would be scored against a label
+    that did not exist when it was produced, and the report would show a schema
+    failure where there was none. That case is exactly when someone is reading this
+    number, so it is the default.
+
+    Questions with no declared option set are skipped; answers with no distribution
+    count as invalid, since a missing distribution is itself a schema failure.
     """
     stats: dict[str, dict] = {}
     for trace in traces:
+        by_name = {q.name: q for q in trace.questions}
         for ans in trace.answers:
-            if ans.question_name not in labels:
+            if labels is not None:
+                expected = labels.get(ans.question_name)
+            else:
+                question = by_name.get(ans.question_name)
+                expected = declared_labels(question) if question else None
+            if expected is None:
                 continue
             row = stats.setdefault(
                 ans.question_name, {"n": 0, "valid": 0, "adherence": 0.0, "reasons": {}}
             )
             row["n"] += 1
-            ok, reason = distribution_is_valid(ans.probabilities, labels[ans.question_name], tol=tol)
+            ok, reason = distribution_is_valid(ans.probabilities, expected, tol=tol)
             if ok:
                 row["valid"] += 1
             else:

@@ -47,8 +47,10 @@ def _load(paths: Sequence[str]) -> list[DecisionTrace]:
 def _sample_traces() -> list[DecisionTrace]:
     """The recorded run bundled with the package, for ``evaljev demo``.
 
-    Real traces from a real benchmark run against the live API — not a simulation.
-    A made-up dashboard would be the one thing this library exists to argue against.
+    The three-node support assistant in ``examples/support_assistant.py``, run
+    against the live API — real decisions, real probabilities, real latencies, and
+    two real edits to one question part-way through. A simulated dashboard would be
+    the one thing this library exists to argue against.
     """
     blob = resources.files("evaljev").joinpath("assets/sample-traces.jsonl.gz").read_bytes()
     lines = gzip.decompress(blob).decode("utf-8").splitlines()
@@ -96,7 +98,7 @@ def cmd_report(args) -> int:
 def cmd_demo(args) -> int:
     report = build_report(
         _sample_traces(),
-        title=args.title or "JevBench run — decision health",
+        title=args.title or "Support assistant — decision health",
         unsure_below=args.unsure_below,
         window_size=args.window,
         recent=args.recent,
@@ -212,7 +214,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(serve)
     serve.set_defaults(func=cmd_serve, open=False)
 
-    demo = sub.add_parser("demo", help="render the page from the recorded run bundled with EvalJev")
+    demo = sub.add_parser(
+        "demo", help="render the page from the example workflow's recorded run"
+    )
     demo.add_argument("-o", "--output", default="evaljev-demo.html", metavar="FILE")
     _add_common(demo)
     demo.set_defaults(func=cmd_demo)

@@ -4,6 +4,7 @@ from evaljev.metrics import (
     calibration_bins,
     distribution_shift,
     expected_calibration_error,
+    schema_adherence,
 )
 
 
@@ -41,3 +42,30 @@ def test_calibration_bins_reports_the_curve_not_just_the_gap():
 
 def test_calibration_bins_ignores_traces_with_no_recorded_outcome():
     assert calibration_bins([_trace(0.9, None)]) == []
+
+
+def test_adherence_scores_each_answer_against_its_own_option_set():
+    """A stream whose schema changed is the normal case for monitoring.
+
+    Holding every answer to the newest label set reports a schema failure for every
+    decision made before the option existed — a false alarm precisely when someone
+    is reading the number.
+    """
+    def trace(labels, chosen_probs):
+        return DecisionTrace(
+            workflow_id="w",
+            node_id="n",
+            state={},
+            questions=[QuestionSpec(name="q", type="choice", instructions="Which?",
+                                    criteria={k: k for k in labels})],
+            answers=[DecisionAnswer(question_name="q", type="choice", selected="a",
+                                    probabilities=chosen_probs)],
+        )
+
+    before = [trace(["a", "b"], {"a": 0.8, "b": 0.2}) for _ in range(3)]
+    after = [trace(["a", "b", "c"], {"a": 0.7, "b": 0.2, "c": 0.1}) for _ in range(2)]
+    assert schema_adherence(before + after)["q"]["adherence"] == 1.0
+
+    # Pass a fixed contract and the older answers are held to it, as documented.
+    forced = schema_adherence(before + after, {"q": ["a", "b", "c"]})
+    assert forced["q"]["valid"] == 2

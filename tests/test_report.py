@@ -138,7 +138,7 @@ def test_a_rewording_is_not_reported_as_jitter():
     assert not check(report, "consistency")["evidence"].get("flipped")
     # ...but the version change itself is still surfaced.
     assert check(report, "config")["status"] == "info"
-    assert "question version" in check(report, "config")["detail"]
+    assert "triage question wording: q1 → q2" in check(report, "config")["detail"]
 
 
 def test_drift_says_unknown_rather_than_ok_on_thin_traffic():
@@ -186,3 +186,102 @@ def test_every_check_carries_the_next_step():
         assert c["question"].endswith("?")
         assert c["advice"]
         assert c["status"] in ("ok", "watch", "problem", "unknown", "info")
+
+
+def workflow_traces(n=24, *, broken_from=None, request_prefix="r"):
+    """A two-node workflow, optionally rewording its first question part-way."""
+    rows = []
+    for i in range(n):
+        broken = broken_from is not None and i >= broken_from
+        rid = f"{request_prefix}{i}"
+        message = f"message {i % 8}"
+        rows.append(
+            DecisionTrace(
+                workflow_id="support",
+                node_id="classify",
+                timestamp=T0 + timedelta(minutes=i),
+                state={"message": message},
+                question_version="v2" if broken else "v1",
+                questions=[QuestionSpec(name="intent", type="choice",
+                                        instructions="Short." if broken else "Which action?",
+                                        criteria=CRITERIA)],
+                answers=[DecisionAnswer(
+                    question_name="intent", type="choice",
+                    selected="status" if broken else "refund",
+                    probabilities={"refund": 0.2, "status": 0.5, "other": 0.3} if broken
+                    else {"refund": 0.98, "status": 0.01, "other": 0.01})],
+                action="status" if broken else "refund",
+                latency_ms=700,
+                metadata={"request_id": rid},
+            )
+        )
+        rows.append(
+            DecisionTrace(
+                workflow_id="support",
+                node_id="handoff",
+                timestamp=T0 + timedelta(minutes=i, seconds=30),
+                state={"message": message, "category": rows[-1].action},
+                question_version="h1",
+                questions=[QuestionSpec(name="needs_human", type="noul",
+                                        instructions="Does this need a person?")],
+                answers=[DecisionAnswer(question_name="needs_human", type="noul", value=0.2)],
+                action="auto",
+                latency_ms=600,
+                metadata={"request_id": rid},
+            )
+        )
+    return rows
+
+
+def test_requests_are_followed_through_the_workflow():
+    report = build_report(workflow_traces())
+    assert [n["node_id"] for n in report["workflow"]] == ["classify", "handoff"]
+    assert report["trajectories"]
+    steps = report["trajectories"][0]["steps"]
+    assert [s["node_id"] for s in steps] == ["classify", "handoff"]
+    assert steps[0]["top"][0][0] == "refund"
+
+
+def test_without_a_request_id_the_workflow_is_not_guessed():
+    rows = workflow_traces()
+    for row in rows:
+        row.metadata = {}
+    report = build_report(rows)
+    assert report["trajectories"] == []
+    # The nodes are still listed — only the path through them is unknown.
+    assert {n["node_id"] for n in report["workflow"]} == {"classify", "handoff"}
+
+
+def test_the_same_input_before_and_after_a_flagged_change_is_surfaced():
+    report = build_report(workflow_traces(n=48, broken_from=36), window_size=12)
+    pairs = report["comparisons"]
+    assert pairs["total"] > 0
+    assert pairs["changed"] > 0
+    example = next(p for p in pairs["pairs"] if p["changed"])
+    assert example["before"]["branch"] == "refund"
+    assert example["after"]["branch"] == "status"
+    assert example["node_id"] == "classify"
+
+
+def test_the_story_names_what_moved_what_changed_and_what_it_did():
+    story = build_report(workflow_traces(n=48, broken_from=36), window_size=12)["story"]
+    assert story["kind"] == "incident"
+    assert story["node_id"] == "classify"
+    labels = [b["label"] for b in story["bullets"]]
+    assert labels == ["What moved", "What changed underneath", "What it did to requests"]
+    assert "certainty" in story["bullets"][0]["text"]
+    assert "rewritten" in story["bullets"][1]["text"]
+
+
+def test_a_clean_stream_gets_a_story_that_claims_nothing():
+    story = build_report(workflow_traces(n=48), window_size=12)["story"]
+    assert story["kind"] == "clean"
+    assert "not proof" in story["bullets"][1]["text"]
+
+
+def test_state_renders_as_text_a_person_can_read():
+    rows = workflow_traces(n=16)
+    report = build_report(rows)
+    shown = report["decisions"][0]["state"]
+    assert shown.startswith("message: ")
+    assert "{" not in shown and '"' not in shown
