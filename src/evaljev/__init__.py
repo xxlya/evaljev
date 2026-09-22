@@ -15,6 +15,7 @@ from .lint import LintIssue, lint_questions
 from .metrics import (
     branch_flip_rate,
     brier_score,
+    calibration_bins,
     calibration_probability,
     calibration_report,
     confidence_to_pmax,
@@ -39,6 +40,12 @@ from .repair import (
     validate_candidate,
 )
 from .replay import replay, summarize_replay
+from .report import (
+    build_report,
+    declared_label_sets,
+    render_html,
+    write_report,
+)
 from .stats import (
     compare_rates,
     exact_mcnemar,
@@ -78,11 +85,14 @@ __all__ = [
     "behaviour_summary",
     "branch_flip_rate",
     "brier_score",
+    "build_report",
+    "calibration_bins",
     "calibration_probability",
     "calibration_report",
     "compare_rates",
     "confidence_to_pmax",
     "count_windows",
+    "declared_label_sets",
     "distribution_is_valid",
     "distribution_shift",
     "drift_report",
@@ -100,6 +110,7 @@ __all__ = [
     "pmax_to_confidence",
     "propose_candidates",
     "rate_with_ci",
+    "render_html",
     "repair_cycle",
     "replay",
     "schema_adherence",
@@ -117,4 +128,5 @@ __all__ = [
     "wilcoxon_signed_rank",
     "wilson_interval",
     "window_metrics",
+    "write_report",
 ]

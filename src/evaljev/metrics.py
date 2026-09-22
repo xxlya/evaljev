@@ -218,3 +218,34 @@ def distribution_shift(p: dict[str, float], q: dict[str, float]) -> float:
 
     jsd = 0.5 * kl(pp, mm) + 0.5 * kl(qq, mm)
     return sqrt(jsd)
+
+
+def calibration_bins(traces: Iterable[DecisionTrace], bins: int = 10) -> list[dict]:
+    """The reliability curve behind :func:`expected_calibration_error`.
+
+    ECE collapses the curve to one number, which hides *which way* the model is
+    wrong: an over-confident model and an under-confident one can score the same.
+    Each row is one probability bucket with the accuracy actually observed in it,
+    so a plot of ``mean_probability`` against ``accuracy`` shows the direction.
+
+    Empty buckets are omitted — a bucket with no decisions in it is not a data
+    point, and drawing it as zero accuracy would invent a failure.
+    """
+    buckets: dict[int, list[tuple[float, int]]] = defaultdict(list)
+    for p, y, _q in _labeled_pairs(traces):
+        b = min(int(p * bins), bins - 1)
+        buckets[b].append((p, y))
+    rows = []
+    for b in sorted(buckets):
+        ps = [p for p, _ in buckets[b]]
+        ys = [y for _, y in buckets[b]]
+        rows.append(
+            {
+                "low": b / bins,
+                "high": (b + 1) / bins,
+                "n": len(ps),
+                "mean_probability": sum(ps) / len(ps),
+                "accuracy": sum(ys) / len(ys),
+            }
+        )
+    return rows
