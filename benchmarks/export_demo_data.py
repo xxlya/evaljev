@@ -2,9 +2,11 @@
 
 Two generated pages plus one data file, all computed by the library itself:
 
-- ``docs/index.html`` — the monitoring dashboard for the example support assistant
-  (``examples/support_assistant.py``), which is exactly what ``evaljev report``
-  writes for anyone else's traces.
+- ``docs/index.html`` — the console for the example support assistant
+  (``examples/support_assistant.py``): which requests need a person, and where in
+  the workflow they were flagged. Exactly what ``evaljev console`` writes for
+  anyone else's traces.
+- ``docs/report.html`` — the full analysis behind it, from the same report dict.
 - ``docs/incident.html`` — a redirect, kept so an already-shared link still lands
   somewhere useful.
 - ``docs/data.js`` — the measurements the "how it works" page walks through, from
@@ -40,21 +42,27 @@ from evaljev.store import latest_by_trace_id
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = "jevbench"
 OUT = REPO / "docs" / "data.js"
-DASHBOARD = REPO / "docs" / "index.html"
+CONSOLE = REPO / "docs" / "index.html"
+FULL_REPORT = REPO / "docs" / "report.html"
 REDIRECT = REPO / "docs" / "incident.html"
 
-LINKS = [
+CONSOLE_LINKS = [
+    {"label": "Full report", "href": "report.html"},
+    {"label": "How it works", "href": "how-it-works.html"},
+    {"label": "GitHub", "href": "https://github.com/xxlya/evaljev"},
+]
+REPORT_LINKS = [
+    {"label": "Console", "href": "./"},
     {"label": "How it works", "href": "how-it-works.html"},
     {"label": "GitHub", "href": "https://github.com/xxlya/evaljev"},
 ]
 
 DEMO_NOTE = (
-    "<b>This is a live example.</b> A three-step support assistant, 351 real decisions "
-    "recorded against the Jev API — and two edits to one question along the way, the kind "
-    "nobody writes a test for. Everything below was computed from those traces; nothing is "
-    "mocked up and no model wrote any of it. The same page is one command away for your own "
-    "workflow: <code>evaljev report traces.jsonl -o report.html</code> · "
-    '<a href="how-it-works.html">How it works &rarr;</a>'
+    "<b>This is a live example.</b> A three-step support assistant \u2014 classify, rate "
+    "urgency, decide whether a person is needed \u2014 with 351 real decisions recorded "
+    "against the Jev API, and two edits to one question along the way. Everything here was "
+    "computed from those traces; nothing is mocked up. Point it at your own workflow with "
+    "<code>evaljev console traces.jsonl</code>."
 )
 
 REDIRECT_HTML = """<!doctype html>
@@ -62,12 +70,12 @@ REDIRECT_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <title>Moved — EvalJev</title>
-<meta http-equiv="refresh" content="0; url=./#caught">
-<link rel="canonical" href="./">
+<meta http-equiv="refresh" content="0; url=./report.html">
+<link rel="canonical" href="./report.html">
 </head>
 <body>
-<p>The caught-failure walkthrough is now part of the dashboard.
-<a href="./#caught">Continue &rarr;</a></p>
+<p>The caught-failure walkthrough is part of the full report now.
+<a href="./report.html">Continue &rarr;</a></p>
 </body>
 </html>
 """
@@ -152,24 +160,37 @@ def load_support() -> list:
     return latest_by_trace_id(traces)
 
 
-def write_dashboard() -> None:
-    """Render the published dashboard with the same code path anyone else gets."""
-    report = build_report(
-        load_support(),
-        title="Support assistant — decision health",
-        links=LINKS,
+def write_pages() -> None:
+    """Render both published views through the code path anyone else gets."""
+    traces = load_support()
+    console = build_report(
+        traces,
+        title="Support assistant",
+        links=CONSOLE_LINKS,
         note=DEMO_NOTE,
     )
-    DASHBOARD.write_text(render_html(report), encoding="utf-8")
+    CONSOLE.write_text(render_html(console, "console"), encoding="utf-8")
+
+    full = build_report(
+        traces,
+        title="Support assistant — decision health",
+        links=REPORT_LINKS,
+        note=DEMO_NOTE + " This is the full analysis behind the console.",
+    )
+    FULL_REPORT.write_text(render_html(full, "report"), encoding="utf-8")
     REDIRECT.write_text(REDIRECT_HTML, encoding="utf-8")
-    head = report["headline"]
-    print(f"wrote {DASHBOARD} ({DASHBOARD.stat().st_size // 1024} KB)")
-    print(f"  {report['meta']['n']} decisions · {head['status']} · score {head['score']}/100")
-    print(f"  {head['summary'][:96]}")
+
+    queue = console["queue"]
+    print(f"wrote {CONSOLE} ({CONSOLE.stat().st_size // 1024} KB)")
+    print(
+        f"  {queue['total']} requests · {queue['counts']['needs_human']} need a person · "
+        f"{queue['counts']['watch']} worth a look · {queue['counts']['auto']} clean"
+    )
+    print(f"wrote {FULL_REPORT} ({FULL_REPORT.stat().st_size // 1024} KB)")
 
 
 def main() -> int:
-    write_dashboard()
+    write_pages()
 
     baseline = JsonlTraceStore(REPO / "benchmarks" / "jevbench-baseline.jsonl").list(WORKFLOW)
     vague = JsonlTraceStore(REPO / "benchmarks" / "jevbench-vague.jsonl").list(WORKFLOW)

@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decision console — EvalJev</title>
+<meta name="description" content="Which requests in a Jev workflow need a person, and where in the workflow they were flagged.">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f6f4;
+    --surface-1: #fcfcfb;
+    --surface-2: #eeeeea;
+    --border:    #dedcd5;
+    --border-strong: #c9c7be;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #76756f;
+    --series-1: #2a78d6;
+    --series-1-wash: rgba(42,120,214,.12);
+    --series-2: #eb6834;
+    --good:     #007a4d;
+    --good-wash: rgba(0,122,77,.12);
+    --warning:  #8a6100;
+    --warning-wash: rgba(138,97,0,.12);
+    --critical: #b3261e;
+    --critical-wash: rgba(179,38,30,.12);
+    --grid: #e4e3dd;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+    --radius: 12px;
+    --maxw: 1180px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-0: #121211;
+      --surface-1: #1a1a19;
+      --surface-2: #232321;
+      --border:    #35342f;
+      --border-strong: #4a493f;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #94938a;
+      --series-1: #3987e5;
+      --series-1-wash: rgba(57,135,229,.16);
+      --series-2: #d95926;
+      --good:     #4cb782;
+      --good-wash: rgba(76,183,130,.14);
+      --warning:  #d9a418;
+      --warning-wash: rgba(217,164,24,.14);
+      --critical: #e66767;
+      --critical-wash: rgba(230,103,103,.14);
+      --grid: #2c2c29;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --border:    #35342f;
+    --border-strong: #4a493f;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #94938a;
+    --series-1: #3987e5;
+    --series-1-wash: rgba(57,135,229,.16);
+    --series-2: #d95926;
+    --good:     #4cb782;
+    --good-wash: rgba(76,183,130,.14);
+    --warning:  #d9a418;
+    --warning-wash: rgba(217,164,24,.14);
+    --critical: #e66767;
+    --critical-wash: rgba(230,103,103,.14);
+    --grid: #2c2c29;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface-0); color: var(--text-primary);
+    font-family: var(--sans); font-size: 15px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 16px; }
+  @media (min-width: 720px) { .wrap { padding: 0 24px; } }
+
+
+  /* ---------- console shell ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 30; background: var(--surface-0);
+    border-bottom: 1px solid var(--border); backdrop-filter: saturate(140%) blur(8px);
+  }
+  .topbar .wrap { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
+  .brand { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted); }
+  .brand b { color: var(--text-primary); font-weight: 600; }
+  .spacer { flex: 1; }
+  button.ghost, a.ghost {
+    font: inherit; font-size: 13px; cursor: pointer; color: var(--text-secondary);
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 7px; padding: 5px 11px; text-decoration: none; white-space: nowrap;
+  }
+  button.ghost:hover, a.ghost:hover { border-color: var(--border-strong); color: var(--text-primary); }
+  .muted { color: var(--text-muted); }
+  code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+
+  header.top { padding: 26px 0 4px; }
+  .note {
+    border-left: 3px solid var(--series-1); background: var(--surface-1);
+    border-radius: 0 9px 9px 0; padding: 11px 14px; margin: 0 0 18px;
+    font-size: 13.5px; color: var(--text-secondary); max-width: 90ch;
+  }
+  .note b { color: var(--text-primary); }
+
+  /* ---------- the three numbers ---------- */
+  .counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .count {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 18px; cursor: pointer; text-align: left; font: inherit; color: inherit;
+  }
+  .count[aria-pressed="true"] { border-color: var(--text-primary); background: var(--surface-2); }
+  .count .v { font-size: 34px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; }
+  .count .k { font-size: 13px; margin-top: 4px; }
+  .count.high .v { color: var(--critical); }
+  .count.mid .v { color: var(--warning); }
+  .count.ok .v { color: var(--good); }
+
+  /* ---------- the program strip ---------- */
+  .program { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; margin-top: 16px; }
+  .program .step {
+    flex: 1 1 200px; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 14px;
+  }
+  .program .step.hot { border-color: color-mix(in srgb, var(--critical) 55%, var(--border)); }
+  .program .step .name { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+  .program .step .meta { font-size: 12.5px; color: var(--text-secondary); margin-top: 5px; }
+  .program .arrow { align-self: center; color: var(--text-muted); }
+  @media (max-width: 720px) { .program .arrow { display: none; } }
+
+  .banner {
+    margin-top: 16px; border: 1px solid color-mix(in srgb, var(--critical) 40%, var(--border));
+    background: var(--critical-wash); border-radius: var(--radius); padding: 12px 16px; font-size: 14px;
+  }
+  .banner a { color: inherit; }
+
+  /* ---------- queue + detail ---------- */
+  .console { display: grid; grid-template-columns: minmax(300px, 420px) 1fr; gap: 16px; margin: 22px 0 0; align-items: start; }
+  @media (max-width: 900px) { .console { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); }
+  .panel > header { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-secondary); }
+  .queue { max-height: 68vh; overflow-y: auto; }
+  .queue button {
+    display: block; width: 100%; text-align: left; font: inherit; color: inherit;
+    background: none; border: none; border-bottom: 1px solid var(--border);
+    padding: 12px 16px; cursor: pointer;
+  }
+  .queue button:hover { background: var(--surface-2); }
+  .queue button[aria-pressed="true"] { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--series-1); }
+  .queue .when { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); }
+  .queue .what { font-size: 13.5px; margin: 3px 0 5px; }
+  .queue .why { font-size: 12.5px; color: var(--text-secondary); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: 0; }
+  .dot.needs_human { background: var(--critical); }
+  .dot.watch { background: var(--warning); }
+  .dot.auto { background: var(--good); }
+
+  .detail { padding: 18px; position: sticky; top: 64px; }
+  .detail h2 { font-size: 17px; margin: 0 0 2px; }
+  .detail .input { font-size: 15px; margin: 0 0 4px; }
+  .detail .id { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); }
+  .why-box { margin: 16px 0; padding: 12px 14px; border-radius: 9px; background: var(--surface-2); font-size: 14px; }
+  .why-box b { display: block; margin-bottom: 3px; }
+
+  .flow { margin: 18px 0 0; padding: 0; list-style: none; }
+  .flow li { position: relative; padding: 0 0 18px 26px; }
+  .flow li:before {
+    content: ""; position: absolute; left: 6px; top: 6px; width: 9px; height: 9px;
+    border-radius: 50%; background: var(--good);
+  }
+  .flow li.flagged:before { background: var(--critical); }
+  .flow li:after {
+    content: ""; position: absolute; left: 10px; top: 18px; bottom: 0; width: 1px; background: var(--border);
+  }
+  .flow li:last-child { padding-bottom: 0; }
+  .flow li:last-child:after { display: none; }
+  .flow .node { font-family: var(--mono); font-size: 12.5px; color: var(--text-secondary); }
+  .flow .chose { font-size: 15px; margin-top: 2px; }
+  .flow .chose b { font-weight: 600; }
+  .flow .bars { margin-top: 7px; display: grid; gap: 3px; max-width: 380px; }
+  .flow .bars .row { display: grid; grid-template-columns: 120px 1fr 40px; gap: 8px; align-items: center; font-size: 12.5px; }
+  .flow .bars .name { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .flow .bars .v { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--text-secondary); }
+  .track { background: var(--border); border-radius: 4px; height: 7px; display: inline-block;
+           overflow: hidden; line-height: 0; font-size: 0; }
+  .bar { display: block; height: 7px; border-radius: 4px; background: var(--series-1); }
+  .bar.warn { background: var(--series-2); }
+  .flow .flag { margin-top: 7px; font-size: 13px; color: var(--critical); }
+  .flow .flag.medium { color: var(--warning); }
+
+  .empty { color: var(--text-muted); font-size: 14px; padding: 18px; }
+  footer { border-top: 1px solid var(--border); margin-top: 34px; padding: 22px 0 50px; color: var(--text-secondary); font-size: 13.5px; }
+  footer a { color: var(--series-1); }
+  pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 14px;
+        overflow-x: auto; font-size: 12.5px; line-height: 1.6; margin: 10px 0 0; font-family: var(--mono); }
+  pre code { background: none; padding: 0; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="wrap">
+    <span class="brand">Eval<b>Jev</b></span>
+    <span class="muted" id="scope" style="font-size:13px"></span>
+    <span class="spacer"></span>
+    <span id="live-badge"></span>
+    <span id="links"></span>
+    <button class="ghost" id="theme-toggle" type="button">Dark mode</button>
+  </div>
+</div>
+
+<header class="top">
+  <div class="wrap">
+    <p class="note" id="note" hidden></p>
+    <div class="counts" id="counts"></div>
+    <div class="program" id="program"></div>
+    <div class="banner" id="banner" hidden></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="console">
+    <section class="panel">
+      <header id="queue-head">Queue</header>
+      <div class="queue" id="queue"></div>
+    </section>
+    <section class="panel detail" id="detail"></section>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><strong>Watch your own workflow.</strong> Record the decisions you already make, then
+      point the console at the file.</p>
+    <pre><code>pip install "git+https://github.com/xxlya/evaljev"
+
+from evaljev import JevHTTPClient, Monitor, JsonlTraceStore
+monitor = Monitor(JsonlTraceStore("traces.jsonl"))
+response, trace = monitor.run(JevHTTPClient(), workflow_id="my-app", node_id="classify",
+                              state=state, questions=questions, policy=my_policy,
+                              metadata={"request_id": request_id})
+
+$ evaljev console traces.jsonl --open      # this screen
+$ evaljev serve traces.jsonl               # the same screen, refreshing as traffic arrives</code></pre>
+    <p class="muted" id="provenance"></p>
+  </div>
+</footer>
+
+<script>
+window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
+</script>
+<script>
+(function () {
+  "use strict";
+  let D = window.EVALJEV_REPORT;
+  if (typeof D === "string") {
+    document.body.innerHTML =
+      '<div class="wrap" style="padding:60px 0"><h1>No data</h1><p>Render this with ' +
+      '<code>evaljev console traces.jsonl</code>.</p></div>';
+    return;
+  }
+
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const num = (x, n = 2) => (x == null || Number.isNaN(x) ? "—" : Number(x).toFixed(n));
+  const int = (x) => (x == null ? "—" : Number(x).toLocaleString());
+  const when = (iso, withDate) => {
+    const d = new Date(iso);
+    if (Number.isNaN(+d)) return String(iso);
+    const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return withDate ? d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + t : t;
+  };
+
+  let filter = "needs_human";
+  let selected = 0;
+
+  function renderTop() {
+    const m = D.meta, q = D.queue;
+    $("#scope").textContent = `${m.workflow_id} · ${int(m.n)} decisions · ${int(q.total)} requests`;
+    document.title = m.title + " — EvalJev console";
+    const note = $("#note");
+    note.hidden = !m.note;
+    if (m.note) note.innerHTML = m.note;
+    $("#links").innerHTML = (m.links || [])
+      .map((l) => `<a class="ghost" href="${esc(l.href)}">${esc(l.label)}</a>`).join(" ");
+    $("#live-badge").innerHTML = m.live_interval_ms
+      ? `<span class="muted" style="font-size:12px">live · every ${Math.round(m.live_interval_ms / 1000)}s</span>` : "";
+
+    const buttons = [
+      ["needs_human", "high", q.counts.needs_human, "need a person"],
+      ["watch", "mid", q.counts.watch, "worth a look"],
+      ["auto", "ok", q.counts.auto, "handled automatically"],
+    ];
+    $("#counts").innerHTML = buttons.map(([key, tone, n, label]) => `
+      <button class="count ${tone}" data-filter="${key}" aria-pressed="${filter === key}">
+        <div class="v">${int(n)}</div>
+        <div class="k">${esc(label)}</div>
+      </button>`).join("");
+    $("#counts").querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => { filter = b.dataset.filter; selected = 0; render(); }));
+
+    const byNode = q.by_node || {};
+    // Red marks the step that *changed*, not merely the ones raising flags: a node
+    // can be the busiest source of unsure answers and still be working as designed.
+    const changed = new Set(
+      (D.checks.find((c) => c.id === "drift")?.evidence?.nodes || [])
+        .filter((n) => n.drifted).map((n) => n.node_id));
+    $("#program").innerHTML = D.workflow.map((n, i) => `
+      ${i ? '<div class="arrow">\u2192</div>' : ""}
+      <div class="step ${changed.has(n.node_id) ? "hot" : ""}">
+        <div class="name">${esc(n.node_id)}</div>
+        <div class="meta">
+          ${int(n.n)} decisions · typical certainty ${num(n.median_certainty, 2)}<br>
+          ${byNode[n.node_id]
+            ? `${int(byNode[n.node_id])} flag(s) raised here`
+            : "nothing flagged here"}
+          ${changed.has(n.node_id) ? "<br><strong>started answering differently</strong>" : ""}
+        </div>
+      </div>`).join("");
+
+    const story = D.story;
+    const banner = $("#banner");
+    banner.hidden = !story || story.kind !== "incident";
+    if (!banner.hidden) {
+      const what = story.bullets.find((b) => b.label === "What moved");
+      banner.innerHTML =
+        `<strong>${esc(story.headline)}</strong> — ${esc(what ? what.text : "")}. ` +
+        `Decisions it made since are flagged below.`;
+    }
+
+    $("#provenance").textContent =
+      `${int(D.meta.n)} decisions from ${when(D.meta.first_seen, true)} to ${when(D.meta.last_seen, true)}` +
+      `, computed by EvalJev from the recorded traces.`;
+  }
+
+  function rows() {
+    return (D.queue.rows || []).filter((r) => r.status === filter);
+  }
+
+  function renderQueue() {
+    const list = rows();
+    const multiday = new Date(D.meta.last_seen) - new Date(D.meta.first_seen) > 24 * 3600 * 1000;
+    const labels = { needs_human: "Need a person", watch: "Worth a look", auto: "Handled automatically" };
+    $("#queue-head").innerHTML =
+      `${esc(labels[filter])} · ${int(filter === "auto" ? D.queue.counts.auto : list.length)} request(s)` +
+      (filter === "auto" ? "" : ` · newest first`);
+
+    if (filter === "auto") {
+      $("#queue").innerHTML =
+        `<p class="empty">${int(D.queue.counts.auto)} requests came through with nothing flagged. ` +
+        `They are not listed: a console should only ever show you what it wants you to look at.</p>`;
+      $("#detail").innerHTML =
+        `<p class="empty">Nothing to review here.</p>`;
+      return;
+    }
+    if (!list.length) {
+      $("#queue").innerHTML = `<p class="empty">Nothing in this pile.</p>`;
+      $("#detail").innerHTML = `<p class="empty">Nothing to review.</p>`;
+      return;
+    }
+    $("#queue").innerHTML = list.map((r, i) => `
+      <button data-i="${i}" aria-pressed="${i === selected}">
+        <div class="when"><span class="dot ${esc(r.status)}"></span>${esc(when(r.time, multiday))} · ${esc(r.flagged_at)}</div>
+        <div class="what">${esc(r.input)}</div>
+        <div class="why">${esc(r.reason)}</div>
+      </button>`).join("");
+    $("#queue").querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => { selected = Number(b.dataset.i); render(); }));
+  }
+
+  function renderDetail() {
+    const list = rows();
+    if (!list.length) return;
+    const r = list[Math.min(selected, list.length - 1)];
+    const line = D.queue.review_line;
+    $("#detail").innerHTML = `
+      <h2>What came in</h2>
+      <p class="input">${esc(r.input)}</p>
+      <p class="id">${esc(r.request_id)} · ${esc(when(r.time, true))} · your workflow sent it to
+        <strong>${esc(r.final_action)}</strong></p>
+      <div class="why-box">
+        <b>Why this is here</b>
+        ${esc(r.reason)} at <code>${esc(r.flagged_at)}</code> — ${esc(r.detail)}.
+      </div>
+      <div class="why-box">
+        <b>What to do</b>
+        ${esc(r.advice)}
+      </div>
+      <h2>The path it took</h2>
+      <ul class="flow">${r.steps.map((s) => `
+        <li class="${s.flags.length ? "flagged" : ""}">
+          <div class="node">${esc(s.node_id)} · ${esc(s.question)}${s.version ? " · " + esc(s.version) : ""}</div>
+          <div class="chose">chose <b>${esc(s.branch)}</b>
+            <span class="muted">· ${num(s.certainty, 2)} certainty · ${int(s.latency_ms)} ms</span></div>
+          <div class="bars">${s.top.map(([label, p]) => `
+            <div class="row">
+              <span class="name">${esc(label)}</span>
+              <span class="track" style="width:96px"><span class="bar ${p < line ? "warn" : ""}"
+                style="width:${Math.round(96 * p)}px"></span></span>
+              <span class="v">${num(p, 2)}</span>
+            </div>`).join("")}</div>
+          ${s.flags.map((f) => `<div class="flag ${esc(f.severity)}">\u26a0 ${esc(f.label)} — ${esc(f.detail)}</div>`).join("")}
+        </li>`).join("")}</ul>`;
+  }
+
+  function render() { renderTop(); renderQueue(); renderDetail(); }
+
+  const root = document.documentElement;
+  const prefersDark = matchMedia("(prefers-color-scheme: dark)");
+  const theme = () => root.getAttribute("data-theme") || (prefersDark.matches ? "dark" : "light");
+  const btn = $("#theme-toggle");
+  const syncTheme = () => { btn.textContent = theme() === "dark" ? "Light mode" : "Dark mode"; };
+  btn.addEventListener("click", () => {
+    root.setAttribute("data-theme", theme() === "dark" ? "light" : "dark");
+    syncTheme();
+  });
+
+  if (D.meta.live_interval_ms) {
+    setInterval(async () => {
+      try {
+        D = await (await fetch("report.json", { cache: "no-store" })).json();
+        render();
+      } catch (err) { /* keep the last good view */ }
+    }, D.meta.live_interval_ms);
+  }
+
+  syncTheme();
+  render();
+})();
+</script>
+</body>
+</html>

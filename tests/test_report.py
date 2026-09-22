@@ -285,3 +285,52 @@ def test_state_renders_as_text_a_person_can_read():
     shown = report["decisions"][0]["state"]
     assert shown.startswith("message: ")
     assert "{" not in shown and '"' not in shown
+
+
+def test_the_queue_triages_requests_rather_than_summarising_them():
+    report = build_report(workflow_traces(n=48, broken_from=36), window_size=12)
+    queue = report["queue"]
+    assert queue["total"] == 48
+    assert queue["counts"]["needs_human"] + queue["counts"]["watch"] + queue["counts"]["auto"] == 48
+    # Every listed row carries the reason and the action, not just a score.
+    for row in queue["rows"]:
+        assert row["reason"] and row["advice"]
+        assert row["flagged_at"] in {"classify", "handoff"}
+        assert any(step["flags"] for step in row["steps"])
+
+
+def test_an_unsure_decision_asks_for_a_person():
+    rows = workflow_traces(n=12)
+    rows[0].answers[0].probabilities = {"refund": 0.45, "status": 0.4, "other": 0.15}
+    rows[0].action = "refund"
+    queue = build_report(rows, unsure_below=0.6)["queue"]
+    first = queue["rows"][0]
+    assert first["status"] == "needs_human"
+    assert first["reason"] == "model was unsure"
+    assert "person" in first["advice"]
+
+
+def test_an_answer_outside_the_schema_outranks_a_softer_flag():
+    """The row's reason is its worst flag, not the first one found."""
+    rows = workflow_traces(n=48, broken_from=36)
+    broken = next(r for r in rows if r.node_id == "classify" and r.question_version == "v2")
+    broken.answers[0].probabilities = {"refund": 0.5, "escalate": 0.5}
+    queue = build_report(rows, window_size=12)["queue"]
+    row = next(r for r in queue["rows"] if r["request_id"] == broken.metadata["request_id"])
+    assert row["reason"] == "answer broke the schema"
+
+
+def test_clean_requests_are_counted_but_not_queued():
+    queue = build_report(workflow_traces(n=12))["queue"]
+    assert queue["counts"]["auto"] == 12
+    assert queue["rows"] == []
+
+
+def test_the_console_and_the_report_render_from_the_same_data():
+    report = build_report(workflow_traces(n=24))
+    console, full = render_html(report, "console"), render_html(report, "report")
+    assert "__EVALJEV_REPORT__" not in console
+    assert "The path it took" in console      # the operational view
+    assert "What we checked" in full          # the analysis view
+    with pytest.raises(ValueError):
+        render_html(report, "nope")

@@ -31,6 +31,8 @@ from .metrics import (
     calibration_bins,
     calibration_report,
     declared_label_sets,
+    declared_labels,
+    distribution_is_valid,
     schema_adherence,
 )
 from .models import DecisionTrace, QuestionSpec, answer_branch, answer_distribution
@@ -334,6 +336,7 @@ def _check_repeat_consistency(traces) -> dict:
                         for c in (_decision_certainty(r) for r in rows)
                         if c is not None
                     ],
+                    "trace_ids": [r.trace_id for r in rows],
                 }
             )
     rate = _rate(len(flipped), len(repeats))
@@ -992,6 +995,200 @@ def _same_input_comparisons(traces, drift_check, unsure_below: float, limit: int
     }
 
 
+FLAG_LABELS = {
+    "unsure": "model was unsure",
+    "invalid": "answer broke the schema",
+    "inconsistent": "same input decided differently",
+    "disagreed": "a reviewer disagreed",
+    "changed": "decided after this step changed",
+}
+
+#: Which flag a request is filed under when it trips several. An answer that is not
+#: a valid distribution outranks everything: whatever the code downstream did with
+#: it, it did by accident. A reviewer's disagreement is next, because it is the one
+#: flag that is already confirmed rather than suspected.
+FLAG_PRIORITY = ["invalid", "disagreed", "inconsistent", "unsure", "changed"]
+
+#: One line per flag, because a queue that says what is wrong and not what to do
+#: about it just moves the thinking somewhere else.
+FLAG_ADVICE = {
+    "unsure": "Have a person decide this one. If a lot of requests land here, the "
+    "options probably overlap — that is a schema problem, not a model problem.",
+    "invalid": "Do not act on this answer: it is not a distribution over the options "
+    "you declared, so whatever your code did with it, it did by accident.",
+    "inconsistent": "Check both answers. An identical input answering two ways is the "
+    "model's own jitter, and this decision is on the wrong side of a boundary.",
+    "disagreed": "Already reviewed and wrong. These are the examples to reach for when "
+    "rewording the question.",
+    "changed": "Recheck what this step decided after the change, and read the full "
+    "report for the diff of what moved.",
+}
+
+
+def _flag_sets(traces, checks, drift) -> dict[str, dict[str, Any]]:
+    """Per-trace flags, resolved once so the queue is a lookup rather than a scan."""
+    labels_ok: dict[str, tuple[bool, str | None]] = {}
+    for trace in traces:
+        by_name = {q.name: q for q in trace.questions}
+        verdict: tuple[bool, str | None] = (True, None)
+        for ans in trace.answers:
+            question = by_name.get(ans.question_name)
+            expected = declared_labels(question) if question else None
+            if expected is None:
+                continue
+            ok, reason = distribution_is_valid(ans.probabilities, expected)
+            if not ok:
+                verdict = (False, reason)
+                break
+        labels_ok[trace.trace_id] = verdict
+
+    inconsistent: set[str] = set()
+    consistency = next((c for c in checks if c["id"] == "consistency"), None)
+    for row in (consistency or {}).get("evidence", {}).get("flipped", []):
+        inconsistent.update(row.get("trace_ids", []))
+
+    changed_nodes = {
+        node["node_id"]: set(node["current_trace_ids"])
+        for node in drift["evidence"].get("nodes", [])
+        if node["drifted"]
+    }
+    return {
+        "valid": labels_ok,
+        "inconsistent": inconsistent,
+        "changed": changed_nodes,
+    }
+
+
+def _flags_for(trace, certainty, unsure_below, resolved) -> list[dict]:
+    """Every reason this one decision is worth a person's time."""
+    flags = []
+    if certainty is not None and certainty < unsure_below:
+        flags.append(
+            {
+                "code": "unsure",
+                "severity": "high",
+                "node_id": trace.node_id,
+                "detail": f"{certainty:.2f} on its top answer, under your {unsure_below:.2f} "
+                "review line",
+            }
+        )
+    ok, reason = resolved["valid"].get(trace.trace_id, (True, None))
+    if not ok:
+        flags.append(
+            {
+                "code": "invalid",
+                "severity": "high",
+                "node_id": trace.node_id,
+                "detail": reason or "the distribution did not match the declared options",
+            }
+        )
+    if trace.trace_id in resolved["inconsistent"]:
+        flags.append(
+            {
+                "code": "inconsistent",
+                "severity": "high",
+                "node_id": trace.node_id,
+                "detail": "an identical input took a different branch on another occasion",
+            }
+        )
+    if trace.outcome_correct is False:
+        flags.append(
+            {
+                "code": "disagreed",
+                "severity": "high",
+                "node_id": trace.node_id,
+                "detail": "the recorded outcome does not match what was decided",
+            }
+        )
+    if trace.trace_id in resolved["changed"].get(trace.node_id, set()):
+        flags.append(
+            {
+                "code": "changed",
+                "severity": "medium",
+                "node_id": trace.node_id,
+                "detail": "this decision point started answering differently in this window, "
+                "so its answers are suspect even when they look confident",
+            }
+        )
+    return flags
+
+
+def _queue(groups, traces, checks, drift, unsure_below: float, limit: int = 80) -> dict:
+    """The operator's view: which requests need a person, and where they went wrong.
+
+    A request is triaged on its worst step. ``needs a person`` is not a guess about
+    the application's own escalation rules — it is the review line the caller passed
+    in, plus the three failures that make an answer unusable whatever the threshold
+    was: a distribution outside the schema, an identical input answered two ways, and
+    an outcome someone already disagreed with.
+    """
+    resolved = _flag_sets(traces, checks, drift)
+    rows, by_node, by_flag = [], {}, {}
+    counts = {"needs_human": 0, "watch": 0, "auto": 0}
+
+    for request_id, steps in groups.items():
+        flags, step_rows = [], []
+        for trace in steps:
+            certainty = _decision_certainty(trace)
+            step_flags = _flags_for(trace, certainty, unsure_below, resolved)
+            step = _step(trace, unsure_below)
+            step["flags"] = [
+                {**f, "label": FLAG_LABELS[f["code"]], "advice": FLAG_ADVICE[f["code"]]}
+                for f in step_flags
+            ]
+            step_rows.append(step)
+            flags += step["flags"]
+
+        severity = {f["severity"] for f in flags}
+        status = "needs_human" if "high" in severity else "watch" if flags else "auto"
+        counts[status] += 1
+        for flag in flags:
+            by_node[flag["node_id"]] = by_node.get(flag["node_id"], 0) + 1
+            by_flag[flag["code"]] = by_flag.get(flag["code"], 0) + 1
+        if status == "auto":
+            continue
+
+        # The row's reason is its worst flag, not its first: "decided after this
+        # step changed" must not stand in front of "the answer broke the schema".
+        worst = min(
+            (f for s in step_rows for f in s["flags"]),
+            key=lambda f: FLAG_PRIORITY.index(f["code"]),
+            default=None,
+        )
+        first = next(
+            (s for s in step_rows if worst and worst in s["flags"]), step_rows[0]
+        )
+        rows.append(
+            {
+                "request_id": request_id,
+                "time": steps[0].timestamp.isoformat(),
+                "input": _short(steps[0].state, 160),
+                "status": status,
+                "flagged_at": first["node_id"],
+                "reason": worst["label"] if worst else "",
+                "detail": worst["detail"] if worst else "",
+                "advice": worst["advice"] if worst else "",
+                "final_action": step_rows[-1]["branch"],
+                "steps": step_rows,
+            }
+        )
+
+    rows.sort(key=lambda r: (r["status"] != "needs_human", r["time"]), reverse=False)
+    rows.sort(key=lambda r: (r["status"] == "needs_human", r["time"]), reverse=True)
+    return {
+        "rows": rows[:limit],
+        "counts": counts,
+        "total": sum(counts.values()),
+        "shown": min(len(rows), limit),
+        "by_node": by_node,
+        "by_flag": [
+            {"code": code, "label": FLAG_LABELS[code], "n": n}
+            for code, n in sorted(by_flag.items(), key=lambda kv: -kv[1])
+        ],
+        "review_line": unsure_below,
+    }
+
+
 def _story(checks, drift, comparisons, findings, n_requests: int) -> dict:
     """The two or three sentences a reader needs before any chart.
 
@@ -1280,6 +1477,7 @@ def build_report(
         ],
         "attribution": findings,
         "story": _story(checks, drift, comparisons, findings, len(groups)),
+        "queue": _queue(groups, rows, checks, drift, unsure_below),
         "workflow": _workflow_path(rows, groups),
         "trajectories": _select_trajectories(trajectories),
         "comparisons": comparisons,
@@ -1288,21 +1486,29 @@ def build_report(
     }
 
 
-def render_html(report: Mapping[str, Any]) -> str:
-    """Render a report as one self-contained HTML page — no network, no build step."""
+VIEWS = {"console": "assets/console.html", "report": "assets/dashboard.html"}
+
+
+def render_html(report: Mapping[str, Any], view: str = "console") -> str:
+    """Render a report as one self-contained HTML page — no network, no build step.
+
+    ``console`` is the operational view: which requests need a person, and where in
+    the workflow they were flagged. ``report`` is the full analysis behind it. Both
+    read the same report dict, so the two can never disagree about a number.
+    """
     from importlib import resources
 
-    template = (
-        resources.files("evaljev").joinpath("assets/dashboard.html").read_text(encoding="utf-8")
-    )
+    if view not in VIEWS:
+        raise ValueError(f"unknown view {view!r}; expected one of {sorted(VIEWS)}")
+    template = resources.files("evaljev").joinpath(VIEWS[view]).read_text(encoding="utf-8")
     payload = json.dumps(report, default=str).replace("</", "<\\/")
     return template.replace('"__EVALJEV_REPORT__"', payload)
 
 
-def write_report(report: Mapping[str, Any], path) -> Any:
+def write_report(report: Mapping[str, Any], path, view: str = "console") -> Any:
     from pathlib import Path
 
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_html(report), encoding="utf-8")
+    out.write_text(render_html(report, view), encoding="utf-8")
     return out
