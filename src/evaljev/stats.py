@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import statistics
 from collections.abc import Sequence
-from math import comb, sqrt
+from math import comb, erfc, sqrt
 
 
 def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -269,3 +269,78 @@ def paired_shift(
         "mean_delta": statistics.fmean(differences) if differences else 0.0,
         "verdict": verdict,
     }
+
+
+def rank_sum_test(a: Sequence[float], b: Sequence[float], *, alpha: float = 0.05) -> dict:
+    """Did two unpaired samples of a continuous quantity come from the same place?
+
+    The reason this exists is that a rate test cannot see a certainty collapse. When
+    a question's wording breaks, the model often keeps answering inside its schema
+    and keeps picking a plausible label — what moves is *how much probability it
+    puts on the winner*. Counting how many decisions crossed a review line throws
+    almost all of that away: 24 answers at 0.99 against 12 spread over 0.43–0.96 is
+    overwhelming as a distribution and marginal as a pair of rates.
+
+    This is the one **approximate** test in this module. Every other comparison here
+    is exact, but no exact null exists once ranks are tied — and the answers coming
+    back from a decision API are tied constantly, with a pile at 1.00. So this is the
+    normal approximation to the Mann-Whitney U, with the standard tie correction and
+    a continuity correction, and ``approximate`` is set on the result to say so. It
+    needs roughly eight values per side before the approximation is worth reading;
+    ``min_samples_needed`` reports that, and callers should check it rather than
+    quoting a p-value computed from four points.
+
+    Returns 1.0 when either side is empty or nothing varies — no evidence either
+    way, which is not the same as agreement.
+    """
+    xs, ys = list(a), list(b)
+    n_a, n_b = len(xs), len(ys)
+    base = {
+        "n_a": n_a,
+        "n_b": n_b,
+        "median_a": statistics.median(xs) if xs else None,
+        "median_b": statistics.median(ys) if ys else None,
+        "alpha": alpha,
+        "approximate": True,
+        "min_samples_needed": 8,
+        "underpowered": min(n_a, n_b) < 8,
+    }
+    if not xs or not ys:
+        return {
+            **base, "u": 0.0, "z": 0.0, "p_value": 1.0, "changed": False,
+            "effect": 0.0, "median_shift": None,
+        }
+
+    pooled = sorted(xs + ys)
+    n = n_a + n_b
+    # Average ranks within each tied block, and collect block sizes for the
+    # variance correction: ties shrink the spread of the null, and ignoring them
+    # would make every p-value here too conservative.
+    ranks: dict[float, float] = {}
+    tie_term = 0.0
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and pooled[j + 1] == pooled[i]:
+            j += 1
+        size = j - i + 1
+        ranks[pooled[i]] = (i + j) / 2 + 1
+        tie_term += size**3 - size
+        i = j + 1
+
+    rank_sum_a = sum(ranks[x] for x in xs)
+    u_a = rank_sum_a - n_a * (n_a + 1) / 2
+    # Rank-biserial correlation: the share of cross-pairs that go one way, in
+    # [-1, 1]. Reported because a p-value says only that the order changed, and on
+    # a tight distribution it says that for a move of 0.01.
+    base["effect"] = 2 * u_a / (n_a * n_b) - 1
+    base["median_shift"] = abs(base["median_a"] - base["median_b"])
+    mu = n_a * n_b / 2
+    variance = (n_a * n_b / 12) * ((n + 1) - tie_term / (n * (n - 1)))
+    if variance <= 0:  # every value identical — nothing was shown
+        return {**base, "u": u_a, "z": 0.0, "p_value": 1.0, "changed": False}
+
+    z = (abs(u_a - mu) - 0.5) / sqrt(variance)
+    z = max(z, 0.0)
+    p = erfc(z / sqrt(2))
+    return {**base, "u": u_a, "z": z, "p_value": p, "changed": p < alpha}

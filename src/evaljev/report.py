@@ -331,6 +331,8 @@ def _translate_signal(signal: str) -> str:
     """Rewrite a drift signal into something a reader can act on."""
     if signal.startswith("action share changed"):
         return "Answers shifted: " + signal.split(":", 1)[1].strip()
+    if signal.startswith("certainty moved"):
+        return "The model got less sure of itself — " + signal[len("certainty moved: ") :]
     if signal.startswith("accuracy"):
         return "Accuracy moved — " + signal
     if signal.startswith("schema adherence"):
@@ -403,8 +405,8 @@ def _check_drift(traces, labels, *, window_size: int | None) -> dict:
         }
 
     if drifted_nodes:
-        headline = "; ".join(
-            f"{e['node_id']}: {e['signals'][0] if e['signals'] else 'changed'}"
+        headline = " | ".join(
+            f"{e['node_id']}: " + "; ".join(e["signals"][:2] or ["changed"])
             for e in drifted_nodes[:3]
         )
         causes = sorted({c for e in drifted_nodes for c in e["changed_components"]})
@@ -499,9 +501,14 @@ def _check_calibration(traces, *, min_labelled: int = 30) -> dict:
         "question": "When it says it is 80% sure, is it right about 80% of the time?",
         "status": status,
         "value": f"gap {gap:.3f}",
-        "detail": f"Average stated certainty was {mean_p:.2f}; the decisions were right "
-        f"{_pct(acc)} of the time — {direction} by {abs(mean_p - acc):.2f} on average, "
-        f"across {total} decisions with a recorded result.",
+        # Two different numbers, and conflating them is how a calibration report
+        # gets read as "fine": the headline gap is the average per-bucket error,
+        # while the overall lean nets out an over-confident band against an
+        # under-confident one and can sit near zero while the gap is large.
+        "detail": f"Across {total} decisions with a recorded result, the typical stated "
+        f"certainty was {mean_p:.2f} and {_pct(acc)} turned out right. Bucket by bucket — "
+        f"which is what the {gap:.3f} gap measures — the stated number was off by that "
+        f"much on average; netted out, it leans {direction} by {abs(mean_p - acc):.2f}.",
         "advice": (
             "Certainty can be trusted as a routing signal at this gap. (A gap under 0.1 "
             "passes here, over 0.2 is a problem.)"
@@ -557,7 +564,13 @@ def _check_config(traces) -> dict:
     }
     changed = {}
     for attr, label in axes.items():
-        seen = sorted({getattr(t, attr) for t in traces if getattr(t, attr) is not None})
+        # In first-seen order, not sorted: the arrow in the detail line reads as a
+        # sequence, and alphabetical order would invent a history that did not happen.
+        seen: list[str] = []
+        for trace in traces:
+            value = getattr(trace, attr)
+            if value is not None and value not in seen:
+                seen.append(value)
         if len(seen) > 1:
             changed[label] = seen
     if not changed:
@@ -575,7 +588,7 @@ def _check_config(traces) -> dict:
         }
     return {
         "id": "config",
-        "title": "Configuration held still",
+        "title": "Configuration changed mid-stream",
         "question": "Did the model, wording, options or policy change mid-stream?",
         "status": "info",
         "value": f"{len(changed)} axis changed",

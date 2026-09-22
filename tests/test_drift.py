@@ -260,3 +260,52 @@ def test_action_share_is_tested_not_thresholded():
     assert report["action_mix_shift"] > 0.1  # the description says "big"
     assert report["moved_actions"] == []  # the test says "not established"
     assert report["drifted"] is False
+
+
+def test_a_certainty_collapse_fires_without_any_labels():
+    """The signal a broken question actually produces.
+
+    Rewording a question rarely makes the model answer outside its schema, and on a
+    small window no single action's share reaches significance. What moves is the
+    probability on the winning label — so this fires while the action mix, the label
+    set and the accuracy column are all unchanged.
+    """
+    sure = [
+        trace(minutes=m, probs={"claude": 0.99, "gemini": 0.005, "other": 0.005})
+        for m in range(24)
+    ]
+    unsure = [
+        trace(minutes=24 + m, probs={"claude": 0.55, "gemini": 0.30, "other": 0.15})
+        for m in range(12)
+    ]
+    report = drift_report(sure + unsure, size=12)
+    assert report["drifted"] is True
+    assert report["moved_actions"] == []          # nothing changed branch
+    assert any("certainty moved" in s for s in report["signals"])
+    assert report["certainty"]["p_value"] < 0.01
+    assert report["certainty"]["median_a"] == 0.99
+    assert report["certainty"]["median_b"] == 0.55
+
+
+def test_a_certainty_test_on_a_thin_window_is_not_quoted():
+    """Under eight values a side the approximation is not worth reading."""
+    sure = [trace(minutes=m, probs={"claude": 0.99, "gemini": 0.01}) for m in range(6)]
+    unsure = [trace(minutes=6 + m, probs={"claude": 0.55, "gemini": 0.45}) for m in range(3)]
+    report = drift_report(sure + unsure, size=3)
+    assert report["certainty"]["underpowered"] is True
+    assert not any("certainty moved" in s for s in report["signals"])
+
+
+def test_a_significant_but_meaningless_certainty_move_is_suppressed():
+    """Significance is not the same as worth reading.
+
+    A distribution piled at 1.00 makes a 0.01 move highly significant in the ranks.
+    The signal needs the move to be large enough to act on as well.
+    """
+    sure = [trace(minutes=m, probs={"claude": 1.0, "gemini": 0.0}) for m in range(12)]
+    barely = [trace(minutes=12 + m, probs={"claude": 0.99, "gemini": 0.01}) for m in range(12)]
+    report = drift_report(sure + barely, size=12)
+    assert report["certainty"]["p_value"] < 0.05     # the ranks did move
+    assert report["certainty"]["median_shift"] < 0.05
+    assert report["certainty"]["moved"] is False     # ...by nothing worth reporting
+    assert not any("certainty moved" in s for s in report["signals"])

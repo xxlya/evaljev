@@ -20,8 +20,8 @@ from typing import Any
 
 from .attribution import action_mix, attribute, behaviour_summary
 from .metrics import distribution_shift, schema_adherence
-from .models import DecisionTrace
-from .stats import compare_rates
+from .models import DecisionTrace, answer_distribution
+from .stats import compare_rates, rank_sum_test
 
 
 @dataclass
@@ -79,6 +79,17 @@ def count_windows(traces: Iterable[DecisionTrace], *, size: int) -> list[Window]
     return out
 
 
+def _certainties(traces: Sequence[DecisionTrace]) -> list[float]:
+    """Probability on each answer's leading label — the label-free health signal."""
+    out = []
+    for trace in traces:
+        for ans in trace.answers:
+            dist = answer_distribution(ans)
+            if dist:
+                out.append(max(dist.values()))
+    return out
+
+
 def _node_mix(traces: Sequence[DecisionTrace]) -> dict[str, float]:
     """Share of traffic per decision node — what was asked, not what was answered."""
     counts: dict[str, int] = {}
@@ -116,6 +127,7 @@ def drift_report(
     alpha: float = 0.05,
     action_shift_threshold: float = 0.1,
     composition_threshold: float = 0.1,
+    certainty_shift_threshold: float = 0.05,
     confidence_threshold: float | None = None,
 ) -> dict:
     """Compare the newest window against everything before it, and say why.
@@ -132,6 +144,13 @@ def drift_report(
     distance on a ten-trace window is large whatever the deployment is doing.
     ``comparable`` is checked first: if the windows carry different mixes of
     decision nodes, nothing below it can be read as deployment drift.
+
+    ``certainty`` tests how sure the model was as a distribution, which is the
+    signal a reworded question actually produces: valid answers, a plausible
+    label, and much less probability on it. It fires only when the rank test
+    clears ``alpha`` *and* the median moved at least
+    ``certainty_shift_threshold``, since significance alone will report a 0.01
+    move on a distribution that sits at 1.00.
     """
     if (window is None) == (size is None):
         raise ValueError("pass exactly one of window= or size=")
@@ -171,6 +190,15 @@ def drift_report(
             len(cur_labelled),
             alpha=alpha,
         )
+
+    # How sure the model was, tested as a distribution rather than as a rate. A
+    # broken question usually keeps answering inside its schema and keeps picking a
+    # plausible label; what collapses is the probability on the winner. Counting
+    # how many answers crossed a threshold discards almost all of that evidence,
+    # which is why this is the signal that fires without labels when wording breaks.
+    certainty = rank_sum_test(
+        _certainties(reference_traces), _certainties(current.traces), alpha=alpha
+    )
 
     adherence = None
     if labels:
@@ -223,6 +251,21 @@ def drift_report(
             for a in moved_actions
         )
         signals.append(f"action share changed: {detail}")
+    # Two gates, because either alone is wrong. Significance alone flags a median
+    # move of 0.01 on a distribution piled at 1.00 — real in the ranks, worth
+    # nothing to anyone. Size alone flags small-window noise.
+    certainty_moved = (
+        certainty["changed"]
+        and not certainty["underpowered"]
+        and (certainty["median_shift"] or 0.0) >= certainty_shift_threshold
+    )
+    certainty["moved"] = certainty_moved
+    certainty["shift_threshold"] = certainty_shift_threshold
+    if certainty_moved:
+        signals.append(
+            f"certainty moved: median {certainty['median_a']:.2f} -> "
+            f"{certainty['median_b']:.2f} (p={certainty['p_value']:.4g})"
+        )
     if accuracy and accuracy["changed"]:
         signals.append(
             f"accuracy {accuracy['reference']['rate']:.3f} -> {accuracy['current']['rate']:.3f} "
@@ -265,6 +308,7 @@ def drift_report(
         "composition_shift": composition_shift,
         "comparable": comparable,
         "accuracy": accuracy,
+        "certainty": certainty,
         "adherence": adherence,
         "signals": signals,
         "drifted": drifted,

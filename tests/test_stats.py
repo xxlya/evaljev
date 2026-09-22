@@ -7,6 +7,7 @@ from evaljev import (
     exact_mcnemar,
     min_discordant_for_significance,
     paired_comparison,
+    rank_sum_test,
     rate_with_ci,
     stability_check,
     summarize_replay,
@@ -370,3 +371,54 @@ def test_four_moved_items_cannot_reach_significance():
     assert result["p_value"] == pytest.approx(0.125)
     assert result["verdict"] == "insufficient evidence"
     assert result["min_samples_needed"] == 6
+
+
+def test_rank_sum_u_matches_a_brute_force_count():
+    """U is the number of (a, b) pairs where a wins, with ties counting a half."""
+    a, b = [1.0, 3.0, 5.0, 7.0], [2.0, 3.0, 4.0]
+    expected = sum((x > y) + 0.5 * (x == y) for x in a for y in b)
+    assert rank_sum_test(a, b)["u"] == expected
+
+
+def test_rank_sum_p_value_tracks_the_exact_permutation_test():
+    """The normal approximation is approximate — but not by much, even at n=6."""
+    from itertools import combinations
+
+    a, b = [0.91, 0.94, 0.96, 0.97, 0.98, 0.99], [0.42, 0.55, 0.61, 0.70, 0.77, 0.88]
+    pooled = a + b
+    n_a = len(a)
+
+    def u_of(group):
+        rest = list(pooled)
+        for v in group:
+            rest.remove(v)
+        return sum((x > y) + 0.5 * (x == y) for x in group for y in rest)
+
+    observed = u_of(a)
+    mu = n_a * len(b) / 2
+    splits = list(combinations(pooled, n_a))
+    exact = sum(abs(u_of(s) - mu) >= abs(observed - mu) for s in splits) / len(splits)
+
+    approx = rank_sum_test(a, b)["p_value"]
+    assert abs(approx - exact) < 0.01
+
+
+def test_rank_sum_says_nothing_when_nothing_moved():
+    same = [0.2, 0.4, 0.6, 0.8, 1.0, 0.3, 0.5, 0.7]
+    result = rank_sum_test(same, list(same))
+    assert result["p_value"] == 1.0
+    assert result["changed"] is False
+
+
+def test_rank_sum_survives_a_fully_tied_sample():
+    # Every answer at 1.00 is the normal case for a confident decision model, and
+    # it drives the tie-corrected variance to zero.
+    result = rank_sum_test([1.0] * 8, [1.0] * 8)
+    assert result["p_value"] == 1.0
+    assert result["changed"] is False
+
+
+def test_rank_sum_flags_a_sample_too_small_to_read():
+    result = rank_sum_test([1.0, 0.9, 0.8], [0.2, 0.1, 0.05])
+    assert result["underpowered"] is True
+    assert result["min_samples_needed"] == 8
