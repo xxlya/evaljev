@@ -1,7 +1,13 @@
-"""Export the demo's data from real traces, so the page cannot drift from the run.
+"""Export the published site from real traces, so it cannot drift from the run.
 
-Every number the demo shows is computed here by the library itself. Regenerate
-after a new benchmark run:
+Two files, both generated, both computed by the library itself:
+
+- ``docs/index.html`` — the monitoring dashboard, exactly what
+  ``evaljev report`` writes for anyone else's traces, rendered here from the
+  recorded JevBench run.
+- ``docs/data.js`` — the measurements the "how it works" page walks through.
+
+Regenerate after a new benchmark run:
 
     python benchmarks/export_demo_data.py
 """
@@ -18,15 +24,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evaljev import (
     JsonlTraceStore,
     attribute,
+    build_report,
     calibration_report,
     confidence_to_pmax,
     drift_report,
+    render_html,
     schema_adherence,
 )
 
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = "jevbench"
 OUT = REPO / "docs" / "data.js"
+DASHBOARD = REPO / "docs" / "index.html"
+
+# The run the published dashboard is rendered from: the baseline sweep plus the two
+# deliberately degraded schema variants, in the order they were recorded.
+RUNS = ("jevbench-baseline", "jevbench-vague", "jevbench-stripped")
 
 # Measurements from live runs that are not recoverable from the stored traces.
 # Each is reproduced by a script under benchmarks/ or documented in the README.
@@ -95,6 +108,32 @@ REPAIR = {
 
 def confidence_table(c: float = 0.55) -> list[dict]:
     return [{"k": k, "pmax": round(confidence_to_pmax(c, k), 4)} for k in (2, 3, 4, 5, 10)]
+
+
+def write_dashboard() -> None:
+    """Render the published dashboard with the same code path anyone else gets."""
+    traces = []
+    for name in RUNS:
+        traces += JsonlTraceStore(REPO / "benchmarks" / f"{name}.jsonl").list(WORKFLOW)
+    report = build_report(
+        traces,
+        title="JevBench run — decision health",
+        note=(
+            "<b>This is a live example.</b> Every number below was computed by EvalJev from "
+            "156 real decisions recorded against the Jev API — nothing here is mocked up. "
+            "The same page is one command away for your own workflow: "
+            "<code>evaljev report traces.jsonl -o report.html</code> \u00b7 "
+            "<a href=\"how-it-works.html\">How it works &rarr;</a>"
+        ),
+        links=[
+            {"label": "How it works", "href": "how-it-works.html"},
+            {"label": "GitHub", "href": "https://github.com/xxlya/evaljev"},
+        ],
+    )
+    DASHBOARD.write_text(render_html(report), encoding="utf-8")
+    head = report["headline"]
+    print(f"wrote {DASHBOARD} ({DASHBOARD.stat().st_size // 1024} KB)")
+    print(f"  {report['meta']['n']} decisions · {head['status']} · score {head['score']}/100")
 
 
 def main() -> int:
@@ -208,6 +247,7 @@ def main() -> int:
         "window.EVALJEV_DATA = " + json.dumps(data, indent=2, default=str) + ";\n",
         encoding="utf-8",
     )
+    write_dashboard()
     print(f"wrote {OUT} ({OUT.stat().st_size} bytes)")
     print(f"  {data['overall']['correct']}/{data['overall']['n']} correct, "
           f"{len(families)} families, {len(pairs)} paraphrase pairs, "

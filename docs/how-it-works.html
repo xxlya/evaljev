@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EvalJev — runtime assurance for typed decisions</title>
+<title>EvalJev — how it works</title>
 <meta name="description" content="A live-data walkthrough of EvalJev: calibration, decision instability, drift attribution and gated schema repair for Jev-class typed decision models.">
 <style>
   :root {
@@ -191,12 +191,13 @@
 
 <header class="hero">
   <div class="wrap">
-    <p class="eyebrow">EvalJev</p>
-    <h1>Runtime assurance for typed decisions</h1>
+    <p class="eyebrow">EvalJev · how it works</p>
+    <h1>The evidence behind the dashboard</h1>
     <p class="lede">
-      JevBench asks whether a decision model is good. EvalJev asks whether the decision
-      workflow you deployed is still healthy — and when it isn't, which component broke.
-      Every number on this page was produced by the library against the live API.
+      The <a href="./">dashboard</a> is what you look at every day. This page is why it
+      says what it says: the measurements the library was built on, each one produced
+      against the live API. JevBench asks whether a decision model is good; EvalJev asks
+      whether the workflow you deployed is still healthy — and when it isn't, what broke.
     </p>
     <p class="provenance" id="provenance">loading…</p>
   </div>
@@ -204,6 +205,7 @@
 
 <nav class="toc">
   <div class="wrap">
+    <a href="./">&larr; Dashboard</a>
     <a href="#run">The run</a>
     <a href="#instability">Instability</a>
     <a href="#confidence">Confidence</a>
@@ -369,6 +371,11 @@
     <pre><code>git clone https://github.com/fstandhartinger/jevbench.git /tmp/jevbench
 python benchmarks/run_jevbench.py --data /tmp/jevbench/datasets/public/original.jsonl --cap 5.00
 python benchmarks/export_demo_data.py</code></pre>
+    <p>
+      <strong>Your own workflow.</strong> <code>pip install "git+https://github.com/xxlya/evaljev"</code>, record the decisions
+      you already make, then <code>evaljev report traces.jsonl -o report.html</code> for the
+      <a href="./">dashboard</a> on your traffic.
+    </p>
     <p class="muted" style="margin-bottom:0">
       Charts are hand-built SVG, no dependencies. Palette validated for colour-vision
       deficiency in both light and dark modes; every chart also ships a table or direct labels.
