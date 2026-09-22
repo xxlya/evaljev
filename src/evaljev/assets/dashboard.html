@@ -497,6 +497,8 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
   const pct = (x, n = 1) => (x == null ? "—" : (100 * x).toFixed(n).replace(/\.0$/, "") + "%");
   const int = (x) => (x == null ? "—" : Number(x).toLocaleString());
   const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  // Identifiers arrive in snake_case from somebody's code; nobody reads a page in it.
+  const words = (s) => String(s == null ? "" : s).replace(/[_-]+/g, " ");
   /* Axis ticks people can read: 0 / 25 / 50, never 0 / 27 / 55. */
   const niceStep = (v) => {
     if (!(v > 0)) return 1;
@@ -829,11 +831,11 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
     $("#path").innerHTML = D.workflow.map((n, i) => `
       ${i ? '<div class="arrow">→</div>' : ""}
       <div class="node ${flagged.has(n.node_id) ? "flagged" : ""}">
-        <div class="name">${esc(n.node_id)}</div>
+        <div class="name" title="${esc(n.node_id)}">${esc(words(n.node_id))}</div>
         <div class="meta">
-          ${esc(kind[n.type] || n.type || "")} · <code>${esc(n.question)}</code><br>
+          ${esc(kind[n.type] || n.type || "")} · ${esc(words(n.question))}<br>
           ${int(n.n)} decisions · typical ${term("certainty", "certainty")} ${num(n.median_certainty, 2)}<br>
-          mostly <strong>${esc(n.top_action)}</strong>
+          mostly <strong>${esc(words(n.top_action))}</strong>
           ${flagged.has(n.node_id) ? `<br>${pill("problem")}` : ""}
         </div>
       </div>`).join("");
@@ -850,13 +852,13 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
         <div class="sides">
           <div class="side">
             <div class="tag">before · ${esc(p.before.version || "")}</div>
-            <div class="branch">${esc(p.before.branch)}</div>
+            <div class="branch">${esc(words(p.before.branch))}</div>
             <div class="cert">${num(p.before.certainty, 2)} certainty</div>
           </div>
           <div class="to">→</div>
           <div class="side">
             <div class="tag">after · ${esc(p.after.version || "")}</div>
-            <div class="branch">${esc(p.after.branch)}${p.changed ? "" : " (unchanged)"}</div>
+            <div class="branch">${esc(words(p.after.branch))}${p.changed ? "" : " (unchanged)"}</div>
             <div class="cert">${num(p.after.certainty, 2)} certainty${p.after.unsure ? " — below your review line" : ""}</div>
           </div>
         </div>
@@ -906,14 +908,14 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
       <p class="req-input">${esc(t.input)}</p>
       <ul class="steps">${t.steps.map((s) => `
         <li>
-          <div class="who">${esc(s.node_id)}<span class="q">${esc(s.question)} · ${esc(s.type)}${
+          <div class="who" title="${esc(s.node_id)}">${esc(words(s.node_id))}<span class="q">${esc(words(s.question))} · ${esc(s.type)}${
             s.version ? " · " + esc(s.version) : ""}</span></div>
           <div>
-            <div>chose <span class="chose">${esc(s.branch)}</span>
+            <div>chose <span class="chose">${esc(words(s.branch))}</span>
               <span class="muted">· ${num(s.certainty, 2)} certainty · ${int(s.latency_ms)} ms</span></div>
             <div class="bars">${s.top.map(([label, p]) => `
               <div class="row">
-                <span class="name">${esc(label)}</span>
+                <span class="name">${esc(words(label))}</span>
                 <span class="track"><span class="bar-mini" style="width:${Math.round(96 * p)}px"></span></span>
                 <span class="v">${num(p, 2)}</span>
               </div>`).join("")}</div>
@@ -1010,7 +1012,7 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
       D.actions.length > 12 ? `Top 12 of ${D.actions.length} branches, by share of traffic.`
                             : "Share of traffic by branch.";
     barChart($("#chart-actions"), actions.map((a) => ({
-      label: a.action == null ? "(no action)" : String(a.action),
+      label: a.action == null ? "(no action)" : words(a.action),
       value: a.share,
       display: pct(a.share, 0),
       tip: `<strong>${esc(a.action)}</strong><br>${int(a.n)} decisions<br>${pct(a.share)} of traffic`,
@@ -1018,8 +1020,8 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
 
     $("#node-table").querySelector("tbody").innerHTML = D.nodes.map((n) => `
       <tr>
-        <td><code>${esc(n.node_id)}</code></td>
-        <td class="muted">${esc(n.questions.join(", "))} <span class="muted">(${esc(n.types.join("/"))})</span></td>
+        <td title="${esc(n.node_id)}">${esc(words(n.node_id))}</td>
+        <td class="muted">${esc(words(n.questions.join(", ")))} <span class="muted">(${esc(n.types.join("/"))})</span></td>
         <td class="num">${int(n.n)}</td>
         <td class="num">${num(n.median_certainty, 2)}</td>
         <td class="num">${n.adherence == null ? '<span class="muted">n/a</span>' : pct(n.adherence, 0)}</td>
@@ -1056,7 +1058,7 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
           <td><strong>${esc(f.component)}</strong><br><span class="muted">${esc(f.summary)}</span></td>
           <td>${f.nodes.length > 3
                 ? `<span class="muted">${f.nodes.length} decision points</span>`
-                : f.nodes.map((n) => `<code>${esc(n)}</code>`).join(" ")}</td>
+                : f.nodes.map((n) => esc(words(n))).join(", ")}</td>
           <td><details class="evidence"><summary>show</summary>
             <pre><code>${esc(JSON.stringify(f.evidence, null, 2))}</code></pre></details></td>
           <td>${f.moved.length ? pill("problem") : pill("ok")}</td>
@@ -1066,11 +1068,11 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
   function renderQuestions() {
     $("#question-table").querySelector("tbody").innerHTML = D.questions.map((q) => `
       <tr>
-        <td><code>${esc(q.name)}</code></td>
+        <td title="${esc(q.name)}">${esc(words(q.name))}</td>
         <td class="muted">${esc(q.type === "noul" ? "yes / no" : q.type === "score" ? "rating" : "choice")}</td>
         <td class="num">${q.k == null ? '<span class="muted">—</span>' : q.k}</td>
         <td>${esc(typeof q.instructions === "string" ? q.instructions : JSON.stringify(q.instructions))}
-          ${q.options ? `<br><span class="muted">${esc(q.options.join(" · "))}</span>` : ""}</td>
+          ${q.options ? `<br><span class="muted">${esc(words(q.options.join(" · ")))}</span>` : ""}</td>
       </tr>`).join("");
   }
 
@@ -1095,9 +1097,9 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
     body.innerHTML = shown.length ? shown.map((r, i) => `
       <tr class="clickable" data-row="${i}">
         <td class="muted">${esc(timeLabel(r.time, multiday))}</td>
-        <td><code>${esc(r.node_id)}</code></td>
+        <td title="${esc(r.node_id)}">${esc(words(r.node_id))}</td>
         <td>${esc(r.state)}</td>
-        <td><strong>${esc(r.action == null ? "—" : r.action)}</strong></td>
+        <td><strong>${esc(words(r.action == null ? "—" : r.action))}</strong></td>
         <td class="num">${r.certainty == null ? "—" : num(r.certainty, 2)}${r.unsure ? " ⚠" : ""}</td>
         <td class="num">${r.latency_ms == null ? "—" : int(r.latency_ms)}</td>
         <td>${r.outcome_correct == null ? '<span class="muted">unknown</span>'
@@ -1114,11 +1116,11 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
         detail.className = "detail-row";
         detail.innerHTML = `<td colspan="7">${r.answers.map((a) => `
           <div style="margin-bottom:10px">
-            <strong>${esc(a.question)}</strong> <span class="muted">(${esc(a.type)})</span> →
-            <strong>${esc(a.branch)}</strong>
+            <strong>${esc(words(a.question))}</strong> <span class="muted">(${esc(a.type)})</span> →
+            <strong>${esc(words(a.branch))}</strong>
             <div class="bars" style="margin-top:6px">${a.top.map(([label, p]) => `
               <div class="row">
-                <span class="name">${esc(label)}</span>
+                <span class="name">${esc(words(label))}</span>
                 <span class="track"><span class="bar-mini" style="width:${Math.round(96 * p)}px"></span></span>
                 <span class="v">${num(p, 2)}</span>
               </div>`).join("")}</div>

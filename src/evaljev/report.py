@@ -1025,6 +1025,37 @@ FLAG_ADVICE = {
 }
 
 
+def _split_state(state: Any) -> tuple[str, str]:
+    """A state as (the thing a person reads, everything else).
+
+    The longest text field is what the request actually *is* — the customer's
+    message, the document, the query. The rest is routing metadata, true but not
+    what anyone scans a queue for, so it goes in the small print.
+    """
+    if not isinstance(state, Mapping):
+        return _short(state, 200), ""
+    text_fields = [(k, v) for k, v in state.items() if isinstance(v, str)]
+    if not text_fields:
+        return _short(state, 200), ""
+    key, primary = max(text_fields, key=lambda kv: len(kv[1]))
+    rest = " · ".join(
+        f"{_friendly(k)}: {v if isinstance(v, str) else json.dumps(v, default=str)}"
+        for k, v in state.items()
+        if k != key
+    )
+    return primary[:220], rest[:120]
+
+
+def _friendly(name: Any) -> str:
+    """An identifier as words. ``classify_request`` reads as ``classify request``.
+
+    Node ids, branch labels and question names come out of somebody's code, so they
+    arrive in snake_case. Printing them that way on a page for non-engineers makes
+    every one of them look like a variable rather than a thing that happened.
+    """
+    return str(name).replace("_", " ").replace("-", " ") if name is not None else ""
+
+
 def _flag_sets(traces, checks, drift) -> dict[str, dict[str, Any]]:
     """Per-trace flags, resolved once so the queue is a lookup rather than a scan."""
     labels_ok: dict[str, tuple[bool, str | None]] = {}
@@ -1158,11 +1189,13 @@ def _queue(groups, traces, checks, drift, unsure_below: float, limit: int = 80) 
         first = next(
             (s for s in step_rows if worst and worst in s["flags"]), step_rows[0]
         )
+        primary, rest = _split_state(steps[0].state)
         rows.append(
             {
                 "request_id": request_id,
                 "time": steps[0].timestamp.isoformat(),
-                "input": _short(steps[0].state, 160),
+                "input": primary,
+                "input_rest": rest,
                 "status": status,
                 "flagged_at": first["node_id"],
                 "reason": worst["label"] if worst else "",
@@ -1175,8 +1208,27 @@ def _queue(groups, traces, checks, drift, unsure_below: float, limit: int = 80) 
 
     rows.sort(key=lambda r: (r["status"] != "needs_human", r["time"]), reverse=False)
     rows.sort(key=lambda r: (r["status"] == "needs_human", r["time"]), reverse=True)
+
+    # One entry per request, in order, for the ribbon across the top: the shape of
+    # the window at a glance, and where in it things started going wrong.
+    timeline = sorted(
+        (
+            {
+                "time": steps[0].timestamp.isoformat(),
+                "status": next(
+                    (r["status"] for r in rows if r["request_id"] == request_id), "auto"
+                ),
+                "request_id": request_id,
+            }
+            for request_id, steps in groups.items()
+        ),
+        key=lambda row: row["time"],
+    )
+
     return {
         "rows": rows[:limit],
+        "timeline": timeline,
+        "headline": _queue_headline(counts, rows, drift),
         "counts": counts,
         "total": sum(counts.values()),
         "shown": min(len(rows), limit),
@@ -1187,6 +1239,41 @@ def _queue(groups, traces, checks, drift, unsure_below: float, limit: int = 80) 
         ],
         "review_line": unsure_below,
     }
+
+
+def _queue_headline(counts: Mapping[str, int], rows: Sequence[Mapping], drift) -> str:
+    """The state of the window as one sentence, for the top of the console.
+
+    A sentence rather than a row of counters: the counters are on the page anyway,
+    and what a reader needs first is which of them matters and why.
+    """
+    total = sum(counts.values())
+    waiting, watch = counts["needs_human"], counts["watch"]
+    flagged = [n for n in drift["evidence"].get("nodes", []) if n["drifted"]]
+    where = ""
+    if rows:
+        busiest: dict[str, int] = {}
+        for row in rows:
+            busiest[row["flagged_at"]] = busiest.get(row["flagged_at"], 0) + 1
+        node = max(busiest, key=lambda k: busiest[k])
+        where = f", most of them at the {_friendly(node)} step"
+
+    if not waiting and not watch:
+        return f"Nothing is waiting on a person. All {total} requests came through clear."
+    if not waiting:
+        return (
+            f"Nothing is waiting on a person, though {watch} of {total} requests are worth "
+            f"a look{where}."
+        )
+    sentence = f"{waiting} of {total} requests are waiting on a person{where}."
+    if flagged:
+        sentence += (
+            " That step started answering differently partway through this window."
+            if flagged[0]["node_id"] in where
+            else f" Meanwhile the {_friendly(flagged[0]['node_id'])} step started answering "
+            "differently partway through this window."
+        )
+    return sentence
 
 
 def _story(checks, drift, comparisons, findings, n_requests: int) -> dict:

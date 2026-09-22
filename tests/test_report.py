@@ -330,7 +330,8 @@ def test_the_console_and_the_report_render_from_the_same_data():
     report = build_report(workflow_traces(n=24))
     console, full = render_html(report, "console"), render_html(report, "report")
     assert "__EVALJEV_REPORT__" not in console
-    assert "The path it took" in console      # the operational view
-    assert "What we checked" in full          # the analysis view
+    # Assert on structure, not on copy: the wording of either page is free to change.
+    assert 'id="rows"' in console and 'id="focus"' in console      # the triage view
+    assert 'id="check-list"' in full and 'id="chart-volume"' in full  # the analysis view
     with pytest.raises(ValueError):
         render_html(report, "nope")
