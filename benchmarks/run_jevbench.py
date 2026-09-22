@@ -1,7 +1,7 @@
 """Run a JevBench split through EvalJev's monitoring layer, under a spend cap.
 
     python benchmarks/run_jevbench.py --data <jevbench>/datasets/public/original.jsonl
-    python benchmarks/run_jevbench.py --data ... --degrade strip-criteria --out degraded.jsonl
+    python benchmarks/run_jevbench.py --data ... --degrade rotate-criteria --out degraded.jsonl
     python benchmarks/run_jevbench.py --compare baseline.jsonl degraded.jsonl
 
 This is not a JevBench re-implementation. JevBench asks "is this decision model
@@ -58,6 +58,12 @@ def degrade(question: dict, mode: str) -> dict:
 
     `strip-criteria` drops the per-label rubric while keeping the labels — the
     schema edit someone makes to "clean up" a prompt, with no test that catches it.
+
+    `rotate-criteria` shifts every description one position along, so each label
+    keeps its name but inherits its neighbour's meaning. Same keys, same `k`, same
+    instructions: nothing a schema validator, a diff of the label set, or a
+    confidence threshold would notice — and the model answers confidently and
+    wrongly. It is the mistake a copy-paste or a reordered dict actually makes.
     """
     if mode == "none":
         return question
@@ -65,6 +71,16 @@ def degrade(question: dict, mode: str) -> dict:
         return {k: v for k, v in question.items() if k != "criteria"}
     if mode == "vague-instructions":
         return {**question, "instructions": "Pick the best option."}
+    if mode == "rotate-criteria":
+        criteria = question.get("criteria")
+        if isinstance(criteria, dict):
+            keys = list(criteria)
+            values = [criteria[k] for k in keys]
+            rotated = dict(zip(keys, values[1:] + values[:1]))
+            return {**question, "criteria": rotated}
+        if isinstance(criteria, list):
+            return {**question, "criteria": criteria[1:] + criteria[:1]}
+        return question
     raise ValueError(f"unknown degradation: {mode}")
 
 
@@ -317,7 +333,11 @@ def main() -> int:
     p.add_argument("--cap", type=float, default=5.00, help="Jev USD ceiling")
     p.add_argument("--limit", type=int, help="only run the first N tasks")
     p.add_argument("--families", nargs="*", help="restrict to these families")
-    p.add_argument("--degrade", default="none", choices=["none", "strip-criteria", "vague-instructions"])
+    p.add_argument(
+        "--degrade",
+        default="none",
+        choices=["none", "strip-criteria", "vague-instructions", "rotate-criteria"],
+    )
     p.add_argument("--out", default="benchmarks/jevbench-traces.jsonl")
     p.add_argument("--compare", nargs=2, metavar=("BASELINE", "CANDIDATE"))
     args = p.parse_args()

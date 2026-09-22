@@ -6,8 +6,9 @@ EvalJev instruments typed probabilistic decisions, links them to downstream outc
 
 > Jev makes decisions fast. EvalJev helps you know when those decisions — and the workflow around them — are reliable.
 
-**Live dashboard: <https://xxlya.github.io/evaljev/>** — a real 156-decision run, rendered
-by the command below. Point it at your own traces and you get the same page:
+**Live dashboard: <https://xxlya.github.io/evaljev/>** — 168 real decisions, rendered by the
+command below, including [the fault it caught](https://xxlya.github.io/evaljev/incident.html).
+Point it at your own traces and you get the same page:
 
 ```bash
 pip install "git+https://github.com/xxlya/evaljev"
@@ -332,6 +333,20 @@ they are different traffic — so comparisons use exact tests for independent
 samples (Fisher), not the paired tests replay uses. The `series` is returned so a
 trend is visible even when no single step trips a threshold.
 
+Three signals are tested, and the one that matters most in production needs no labels:
+
+- **Certainty is tested as a distribution.** When a question's wording breaks, the
+  model usually keeps answering inside its schema and keeps picking a plausible
+  label — what collapses is the probability on the winner. A rank test on `p_max`
+  across the two windows sees that; counting how many answers crossed a review line
+  does not. On the recorded incident below it fires at `p = 2e-06` with no ground
+  truth, and the labelled accuracy signal only confirms it afterwards.
+  `rank_sum_test` is the one **approximate** test in `stats` — no exact null exists
+  once ranks are tied, and decision APIs tie constantly at 1.00 — so it is gated on
+  a minimum sample (8 a side) and a minimum move (`certainty_shift_threshold`,
+  default 0.05). Significance alone will report a 0.01 move on a distribution that
+  sits at 1.00.
+
 Two guards exist because live traces showed the report is misleading without them:
 
 - **`comparable`** is checked first. If the windows carry different mixes of
@@ -524,15 +539,27 @@ Path("report.html").write_text(render_html(report))
 
 `docs/` is a dependency-free static site — GitHub Pages serves it directly. Enable it
 under **Settings → Pages → Source: `main` / `/docs`**; there is no build step and no
-workflow to configure. It is two pages: the dashboard (`index.html`) and the evidence
-behind it (`how-it-works.html`).
+workflow to configure. It is three pages: the dashboard (`index.html`), the same
+dashboard narrowed to a decision point where a fault was deliberately injected
+(`incident.html`), and the evidence behind the library (`how-it-works.html`).
 
 ```bash
-python benchmarks/export_demo_data.py   # regenerates both pages from the stored traces
+python benchmarks/export_demo_data.py   # regenerates all three pages from the stored traces
 python -m http.server -d docs 8765      # preview at http://localhost:8765
 ```
 
-Every number on both pages is computed by the library from `benchmarks/*.jsonl`, so the
+The injected fault is reproducible: `--degrade rotate-criteria` shifts every option
+description one position along, so each label keeps its name and inherits its
+neighbour's meaning — same keys, same `k`, same instructions, and nothing a schema
+validator or a label-set diff can see. Accuracy on that decision point falls from
+12/12 to 2/12 while every answer returned stays valid.
+
+```bash
+python benchmarks/run_jevbench.py --data /tmp/jevbench/datasets/public/original.jsonl \
+    --families intent --degrade rotate-criteria --out benchmarks/jevbench-rotated.jsonl
+```
+
+Every number on all three pages is computed by the library from `benchmarks/*.jsonl`, so the
 site cannot drift from the run that produced it — rerun the benchmark and the export, and
 the pages follow. Charts are hand-built SVG with no dependencies; the categorical palette
 is validated for colour-vision deficiency against both the light and dark surfaces, and

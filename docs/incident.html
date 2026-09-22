@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decision health — EvalJev</title>
+<meta name="description" content="A plain-language health report for a deployed Jev decision workflow: what it decided, how sure it was, what changed, and what to look at first.">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f6f6f4;
+    --surface-1: #fcfcfb;
+    --surface-2: #eeeeea;
+    --border:    #dedcd5;
+    --border-strong: #c9c7be;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #76756f;
+    --series-1: #2a78d6;
+    --series-1-wash: rgba(42,120,214,.12);
+    --series-2: #eb6834;
+    --good:     #007a4d;
+    --good-wash: rgba(0,122,77,.12);
+    --warning:  #8a6100;
+    --warning-wash: rgba(138,97,0,.12);
+    --critical: #b3261e;
+    --critical-wash: rgba(179,38,30,.12);
+    --grid: #e4e3dd;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+    --radius: 12px;
+    --maxw: 1180px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-0: #121211;
+      --surface-1: #1a1a19;
+      --surface-2: #232321;
+      --border:    #35342f;
+      --border-strong: #4a493f;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #94938a;
+      --series-1: #3987e5;
+      --series-1-wash: rgba(57,135,229,.16);
+      --series-2: #d95926;
+      --good:     #4cb782;
+      --good-wash: rgba(76,183,130,.14);
+      --warning:  #d9a418;
+      --warning-wash: rgba(217,164,24,.14);
+      --critical: #e66767;
+      --critical-wash: rgba(230,103,103,.14);
+      --grid: #2c2c29;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --border:    #35342f;
+    --border-strong: #4a493f;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #94938a;
+    --series-1: #3987e5;
+    --series-1-wash: rgba(57,135,229,.16);
+    --series-2: #d95926;
+    --good:     #4cb782;
+    --good-wash: rgba(76,183,130,.14);
+    --warning:  #d9a418;
+    --warning-wash: rgba(217,164,24,.14);
+    --critical: #e66767;
+    --critical-wash: rgba(230,103,103,.14);
+    --grid: #2c2c29;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface-0); color: var(--text-primary);
+    font-family: var(--sans); font-size: 15px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 16px; }
+  @media (min-width: 720px) { .wrap { padding: 0 24px; } }
+
+  /* ---------- top bar ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 30; background: var(--surface-0);
+    border-bottom: 1px solid var(--border); backdrop-filter: saturate(140%) blur(8px);
+  }
+  .topbar .wrap { display: flex; align-items: center; gap: 12px; padding-top: 10px; padding-bottom: 10px; }
+  .brand { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted); }
+  .brand b { color: var(--text-primary); font-weight: 600; }
+  .spacer { flex: 1; }
+  button.ghost, a.ghost {
+    font: inherit; font-size: 13px; cursor: pointer; color: var(--text-secondary);
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 7px; padding: 5px 11px; text-decoration: none; white-space: nowrap;
+  }
+  button.ghost:hover, a.ghost:hover { border-color: var(--border-strong); color: var(--text-primary); }
+
+  /* ---------- hero ---------- */
+  header.hero { padding: 34px 0 6px; }
+  .scope { font-family: var(--mono); font-size: 12px; color: var(--text-muted); margin: 0 0 14px; }
+  .verdict { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .verdict .mark {
+    width: 46px; height: 46px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    font-size: 22px; font-weight: 700; line-height: 1;
+  }
+  .verdict .mark.ok { background: var(--good-wash); color: var(--good); }
+  .verdict .mark.watch { background: var(--warning-wash); color: var(--warning); }
+  .verdict .mark.problem { background: var(--critical-wash); color: var(--critical); }
+  .verdict h1 { font-size: clamp(26px, 4.2vw, 38px); line-height: 1.1; margin: 0 0 6px; letter-spacing: -.02em; }
+  .verdict p { margin: 0; color: var(--text-secondary); max-width: 62ch; }
+  .verdict .col { min-width: 260px; flex: 1; }
+
+  /* ---------- tiles ---------- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px,1fr)); gap: 12px; margin: 26px 0 8px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .tile .k { font-size: 12px; color: var(--text-muted); }
+  .tile .v { font-size: 27px; font-weight: 600; letter-spacing: -.02em; margin-top: 4px; }
+  .tile .n { font-size: 12px; color: var(--text-secondary); margin-top: 3px; line-height: 1.4; }
+  .tile.watch { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
+  .tile.problem { border-color: color-mix(in srgb, var(--critical) 45%, var(--border)); }
+
+  /* ---------- sections & cards ---------- */
+  section { padding: 34px 0 0; scroll-margin-top: 60px; }
+  h2 { font-size: 20px; margin: 0 0 4px; letter-spacing: -.01em; }
+  h3 { font-size: 15px; margin: 0 0 4px; }
+  .sub { color: var(--text-secondary); max-width: 74ch; margin: 0 0 16px; font-size: 14px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px,1fr)); gap: 14px; align-items: start; }
+  .stack > * + * { margin-top: 12px; }
+
+  /* ---------- checks ---------- */
+  .check { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-1); overflow: hidden; }
+  .check + .check { margin-top: 10px; }
+  .check > summary {
+    display: flex; gap: 12px; align-items: baseline; cursor: pointer; padding: 14px 16px;
+    list-style: none; flex-wrap: wrap;
+  }
+  .check > summary::-webkit-details-marker { display: none; }
+  .check > summary:hover { background: var(--surface-2); }
+  .check .title { font-weight: 600; flex: 1; min-width: 200px; }
+  .check .value { font-family: var(--mono); font-size: 13px; color: var(--text-secondary); }
+  .check .caret { color: var(--text-muted); font-size: 12px; }
+  .check .body { padding: 0 16px 16px 16px; }
+  .check .body .q { color: var(--text-muted); font-size: 13px; margin: 0 0 8px; }
+  .check .body .detail { margin: 0 0 10px; max-width: 78ch; }
+  .check .body .advice {
+    margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--surface-2);
+    font-size: 14px; color: var(--text-secondary); max-width: 78ch;
+  }
+  .check .body .advice b { color: var(--text-primary); }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+    padding: 2px 10px 2px 8px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid currentColor;
+  }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .pill.ok { color: var(--good); }
+  .pill.watch { color: var(--warning); }
+  .pill.problem { color: var(--critical); }
+  .pill.unknown, .pill.info { color: var(--text-muted); }
+
+  /* ---------- tables ---------- */
+  .scroll-x { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); font-weight: 600; font-family: var(--mono); white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 12.5px; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.clickable { cursor: pointer; }
+  tbody tr.clickable:hover { background: var(--surface-2); }
+  tr.detail-row td { background: var(--surface-2); font-size: 13px; }
+
+  /* ---------- charts ---------- */
+  figure { margin: 0; }
+  .chart-title { font-size: 14px; font-weight: 600; }
+  .chart-sub { font-size: 12.5px; color: var(--text-muted); margin: 2px 0 12px; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .grid-line { stroke: var(--grid); stroke-width: 1; }
+  .axis-text { fill: var(--text-muted); font-size: 11px; font-family: var(--mono); }
+  .label-text { fill: var(--text-secondary); font-size: 12px; }
+  .value-text { fill: var(--text-primary); font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .rule { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 4 3; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12.5px; color: var(--text-secondary); }
+  .legend .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+  .takeaway { font-size: 13px; color: var(--text-secondary); margin: 12px 0 0; max-width: 74ch; }
+
+  /* ---------- misc ---------- */
+  code, pre { font-family: var(--mono); }
+  code { font-size: .88em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 14px; overflow-x: auto; font-size: 12.5px; line-height: 1.6; margin: 0; }
+  pre code { background: none; padding: 0; }
+  .term { border-bottom: 1px dotted var(--border-strong); cursor: help; }
+  .muted { color: var(--text-muted); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .chip {
+    font: inherit; font-size: 13px; cursor: pointer; padding: 4px 11px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+  }
+  .chip[aria-pressed="true"] { border-color: var(--text-primary); color: var(--text-primary); background: var(--surface-2); }
+  /* line-height: 0 matters — an inline-block bar would otherwise sit on the track's
+     text baseline, below the 7px the track actually shows, and vanish. */
+  .track {
+    background: var(--border); border-radius: 4px; height: 7px; width: 96px;
+    display: inline-block; vertical-align: middle; overflow: hidden;
+    line-height: 0; font-size: 0; flex: none;
+  }
+  .bar-mini { display: block; height: 7px; border-radius: 4px; background: var(--series-1); max-width: 100%; }
+  details.evidence { margin-top: 12px; }
+  details.evidence summary { font-size: 12.5px; color: var(--text-muted); cursor: pointer; }
+  details.evidence pre { margin-top: 8px; max-height: 320px; overflow: auto; }
+  footer { border-top: 1px solid var(--border); margin-top: 44px; padding: 26px 0 60px; color: var(--text-secondary); font-size: 13.5px; }
+  footer h3 { margin-top: 0; }
+  footer a { color: var(--series-1); }
+  #tip {
+    position: fixed; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border-strong); border-radius: 8px;
+    padding: 8px 10px; font-size: 12.5px; line-height: 1.5;
+    box-shadow: 0 8px 24px rgba(0,0,0,.18); z-index: 60; max-width: 300px;
+  }
+  .hit { cursor: crosshair; }
+  .empty { color: var(--text-muted); font-size: 14px; }
+  .note {
+    border-left: 3px solid var(--series-1); background: var(--surface-1);
+    border-radius: 0 9px 9px 0; padding: 11px 14px; margin: 0 0 20px;
+    font-size: 14px; color: var(--text-secondary); max-width: 82ch;
+  }
+  .note b { color: var(--text-primary); }
+  @media (max-width: 560px) { .check .caret { display: none; } }
+</style>
+</head>
+<body>
+<div id="tip" role="status" aria-live="polite"></div>
+
+<div class="topbar">
+  <div class="wrap">
+    <span class="brand">Eval<b>Jev</b></span>
+    <span class="muted" id="topbar-scope" style="font-size:13px"></span>
+    <span class="spacer"></span>
+    <span id="links" class="chips"></span>
+    <span id="live-badge"></span>
+    <button class="ghost" id="theme-toggle" type="button">Dark mode</button>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="scope" id="scope">—</p>
+    <p class="note" id="note" hidden></p>
+    <div class="verdict">
+      <div class="mark" id="verdict-mark">·</div>
+      <div class="col">
+        <h1 id="verdict-title">Loading…</h1>
+        <p id="verdict-summary"></p>
+        <p id="verdict-unknown" class="muted" style="font-size:13px;margin-top:8px"></p>
+      </div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="checks">
+  <h2>What we checked</h2>
+  <p class="sub">
+    Eight questions about the health of this workflow, in the order that matters most.
+    Open any row for the numbers behind it and what to do next. Checks that could not
+    be answered say so — "not measured" never means "fine".
+  </p>
+  <div id="check-list"></div>
+</section>
+
+<section id="activity">
+  <h2>Traffic over time</h2>
+  <p class="sub">
+    Equal-sized slices of the stream, oldest on the left, so each point carries the same
+    weight no matter how bursty the traffic was.
+  </p>
+  <div class="grid2">
+    <div class="card"><figure>
+      <div class="chart-title">Decisions per slice</div>
+      <div class="chart-sub" id="volume-sub"></div>
+      <div id="chart-volume"></div>
+    </figure></div>
+    <div class="card"><figure>
+      <div class="chart-title">Share sent to the unsure pile</div>
+      <div class="chart-sub" id="unsure-sub"></div>
+      <div id="chart-unsure"></div>
+    </figure></div>
+  </div>
+</section>
+
+<section id="certainty">
+  <h2>How sure the model was</h2>
+  <p class="sub">
+    Every decision puts a probability on each option. This is where the winning option's
+    probability landed — the right-hand pile is the model being definite, the left-hand
+    tail is where it was nearly guessing.
+  </p>
+  <div class="grid2">
+    <div class="card"><figure>
+      <div class="legend" id="legend-certainty"></div>
+      <div id="chart-certainty"></div>
+      <p class="takeaway" id="certainty-takeaway"></p>
+    </figure></div>
+    <div class="card" id="reliability-card"><figure>
+      <div class="chart-title">Was that certainty earned?</div>
+      <div class="chart-sub">Stated probability against what actually happened, for the decisions with a recorded result.</div>
+      <div id="chart-reliability"></div>
+      <p class="takeaway" id="reliability-takeaway"></p>
+    </figure></div>
+  </div>
+</section>
+
+<section id="behaviour">
+  <h2>What it decided</h2>
+  <p class="sub">
+    The branches your policy actually took. A share that moves without a matching change
+    in your inputs is the earliest sign something shifted.
+  </p>
+  <div class="stack">
+    <div class="card"><figure>
+      <div class="chart-title">Branches taken</div>
+      <div class="chart-sub" id="actions-sub"></div>
+      <div id="chart-actions"></div>
+    </figure></div>
+    <div class="card">
+      <h3>Decision points</h3>
+      <p class="chart-sub">Each place in the workflow that asks the model something, tracked separately.</p>
+      <div class="scroll-x"><table id="node-table">
+        <thead><tr>
+          <th>Decision point</th><th>Asks</th><th class="num">Decisions</th>
+          <th class="num">Typical certainty</th><th class="num">Valid answers</th>
+          <th class="num">Speed</th><th class="num">Accuracy</th>
+        </tr></thead><tbody></tbody>
+      </table></div>
+    </div>
+  </div>
+</section>
+
+<section id="changed">
+  <h2>What changed</h2>
+  <p class="sub">
+    A diff of what was recorded on the traces themselves — wording, options, versions,
+    input shape. No model is asked; this is exact, repeatable and safe to act on.
+  </p>
+  <div class="card" id="changed-card"></div>
+</section>
+
+<section id="questions">
+  <h2>The questions you are asking</h2>
+  <p class="sub">The most recent wording and option set seen for each question.</p>
+  <div class="card"><div class="scroll-x"><table id="question-table">
+    <thead><tr><th>Question</th><th>Type</th><th class="num">Options</th><th>Wording</th></tr></thead>
+    <tbody></tbody>
+  </table></div></div>
+</section>
+
+<section id="recent">
+  <h2>Recent decisions</h2>
+  <p class="sub">The newest decisions, with the full probability spread behind each one. Click a row to open it.</p>
+  <div class="card">
+    <div class="chips" id="decision-filters" style="margin-bottom:12px"></div>
+    <div class="scroll-x"><table id="decision-table">
+      <thead><tr>
+        <th>When</th><th>Decision point</th><th>Input</th><th>Chose</th>
+        <th class="num">Certainty</th><th class="num">Speed</th><th>Result</th>
+      </tr></thead><tbody></tbody>
+    </table></div>
+    <p class="takeaway" id="decision-note"></p>
+  </div>
+</section>
+
+<section id="terms">
+  <h2>Plain-language glossary</h2>
+  <p class="sub">Every term on this page, in one sentence.</p>
+  <div class="card"><div class="scroll-x"><table id="glossary-table"><tbody></tbody></table></div></div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <h3>Point this at your own workflow</h3>
+    <p>
+      Wrap the decision you already make, then render the page from the file it writes.
+      No service to sign up for, no data leaves your machine.
+    </p>
+    <pre><code>pip install "git+https://github.com/xxlya/evaljev"
+
+# 1. record the decisions your workflow already makes
+from evaljev import JevHTTPClient, Monitor, JsonlTraceStore
+monitor = Monitor(JsonlTraceStore("traces.jsonl"))
+response, trace = monitor.run(JevHTTPClient(), workflow_id="my-app",
+                              node_id="router", state=state,
+                              questions=questions, policy=my_policy)
+monitor.record_outcome(trace, outcome=what_happened, correct=True)  # when you find out
+
+# 2. build this page
+$ evaljev report traces.jsonl -o report.html     # one file, open it anywhere
+$ evaljev serve traces.jsonl                     # or watch it live while traffic runs</code></pre>
+    <p class="muted" id="footer-provenance"></p>
+  </div>
+</footer>
+
+<script>
+window.EVALJEV_REPORT = {"meta": {"title": "Incident \u2014 a question that was reworded", "workflow_id": "jevbench", "generated_at": "2026-09-21T21:24:19-07:00", "first_seen": "2026-09-20T15:38:58.839438+00:00", "last_seen": "2026-09-22T04:14:44.386627+00:00", "n": 36, "nodes": ["intent"], "models": ["jev-1.13.0"], "unsure_below": 0.6, "live_interval_ms": null, "links": [{"label": "Dashboard", "href": "./"}, {"label": "How it works", "href": "how-it-works.html"}, {"label": "GitHub", "href": "https://github.com/xxlya/evaljev"}], "note": "<b>What a caught failure looks like.<\/b> One decision point, 36 real decisions, three windows of twelve: the original question, a vaguely reworded one, and one whose five option descriptions were each shifted a position \u2014 same labels, same option count, same instructions. No schema check can see that, and every answer that came back was valid. Read the checks in order: the model stayed inside its schema, got far less sure of itself (which needs no labels), and the diff names the wording change. The accuracy column, which you would not have in production, only confirms it afterwards."}, "headline": {"status": "problem", "score": 50, "summary": "2 things need attention: stated certainty matches reality; recent traffic still behaves like earlier traffic", "unknown": ["Same input, same answer"]}, "checks": [{"id": "calibration", "title": "Stated certainty matches reality", "question": "When it says it is 80% sure, is it right about 80% of the time?", "status": "problem", "value": "gap 0.225", "detail": "Across 36 decisions with a recorded result, the typical stated certainty was 0.91 and 72.2% turned out right. Bucket by bucket \u2014 which is what the 0.225 gap measures \u2014 the stated number was off by that much on average; netted out, it leans over-confident by 0.18.", "advice": "The model is over-confident. Pick your review threshold from the observed curve below rather than from the stated number, and use the probability itself \u2014 never the API's `confidence` field, which rescales with the option count.", "evidence": {"per_question": {"intent": {"n": 36, "accuracy": 0.7222222222222222, "mean_probability": 0.9069444444444444, "ece": 0.22527777777777785, "brier": 0.181575}}, "gap": 0.22527777777777785, "bins": [{"low": 0.4, "high": 0.5, "n": 1, "mean_probability": 0.43, "accuracy": 0.0}, {"low": 0.5, "high": 0.6, "n": 1, "mean_probability": 0.53, "accuracy": 0.0}, {"low": 0.6, "high": 0.7, "n": 2, "mean_probability": 0.635, "accuracy": 1.0}, {"low": 0.7, "high": 0.8, "n": 2, "mean_probability": 0.75, "accuracy": 0.0}, {"low": 0.8, "high": 0.9, "n": 4, "mean_probability": 0.835, "accuracy": 0.25}, {"low": 0.9, "high": 1.0, "n": 26, "mean_probability": 0.9838461538461539, "accuracy": 0.8846153846153846}], "verdict_thresholds": {"ok_below": 0.1, "problem_at_or_above": 0.2}}}, {"id": "drift", "title": "Recent traffic still behaves like earlier traffic", "question": "Has anything started answering differently than it used to?", "status": "problem", "value": "1 of 1 decision points changed", "detail": "intent: The model got less sure of itself \u2014 median 1.00 -> 0.79 (p=1.651e-06); Accuracy moved \u2014 accuracy 1.000 -> 0.167 (p=0.0000)", "advice": "Start from what changed on the traces: question, schema. The diff is in the 'What changed' panel below.", "evidence": {"nodes": [{"node_id": "intent", "n": 36, "window_size": 12, "windows": 3, "drifted": true, "signals": ["The model got less sure of itself \u2014 median 1.00 -> 0.79 (p=1.651e-06)", "Accuracy moved \u2014 accuracy 1.000 -> 0.167 (p=0.0000)"], "moved_actions": [], "next_step": "Drift detected, and ['question', 'schema'] changed on the traces. Start from those diffs.", "changed_components": ["question", "schema"], "findings": [{"component": "question", "changed": true, "summary": "question_version changed: ['none', 'vague-instructions'] -> ['rotate-criteria']", "evidence": {"field": "question_version", "reference": ["none", "vague-instructions"], "current": ["rotate-criteria"]}}, {"component": "schema", "changed": true, "summary": "question 'intent': instructions rewritten", "evidence": {"question": "intent", "reference": "Pick the best option.", "current": "Select the primary requested action. A mention without a request does not establish intent."}}, {"component": "schema", "changed": true, "summary": "question 'intent': criteria reworded for ['cancel', 'change_address', 'other', 'refund', 'status']", "evidence": {"question": "intent", "labels": ["cancel", "change_address", "other", "refund", "status"]}}, {"component": "behaviour", "changed": true, "summary": "action mix shifted (JS distance 0.380)", "evidence": {"distribution_shift": 0.3802781321512799, "reference": {"refund": 0.16666666666666666, "status": 0.3333333333333333, "change_address": 0.16666666666666666, "cancel": 0.16666666666666666, "other": 0.16666666666666666}, "current": {"other": 0.16666666666666666, "refund": 0.3333333333333333, "change_address": 0.3333333333333333, "status": 0.16666666666666666}}}], "series": [{"index": 0, "n": 12, "start": "2026-09-20T15:38:58.839438+00:00", "mean_certainty": 0.99, "median_latency_ms": 881.5537289774511, "accuracy": 1.0, "action_mix": {"refund": 0.16666666666666666, "status": 0.3333333333333333, "change_address": 0.16666666666666666, "cancel": 0.16666666666666666, "other": 0.16666666666666666}}, {"index": 1, "n": 12, "start": "2026-09-20T15:41:22.631347+00:00", "mean_certainty": 0.9808333333333333, "median_latency_ms": 900.819270987995, "accuracy": 1.0, "action_mix": {"refund": 0.16666666666666666, "status": 0.3333333333333333, "change_address": 0.16666666666666666, "cancel": 0.16666666666666666, "other": 0.16666666666666666}}, {"index": 2, "n": 12, "start": "2026-09-22T04:14:35.513083+00:00", "mean_certainty": 0.75, "median_latency_ms": 747.1882079844363, "accuracy": 0.16666666666666666, "action_mix": {"other": 0.16666666666666666, "refund": 0.3333333333333333, "change_address": 0.3333333333333333, "status": 0.16666666666666666}}]}], "untestable": []}}, {"id": "consistency", "title": "Same input, same answer", "question": "When the identical input came in twice, did it decide the same way?", "status": "unknown", "value": "no repeats", "detail": "No input appeared twice in this traffic, so repeat consistency could not be measured.", "advice": "To measure stability deliberately, run stability_check() with a handful of rephrasings of one real request. Rephrasing finds flips that repeating the same words never will.", "evidence": {}}, {"id": "certainty", "title": "How often the model was unsure", "question": "How many decisions landed below your 0.60 review line?", "status": "ok", "value": "5.6%", "detail": "2 of 36 decisions put less than 0.60 probability on their top answer \u2014 5.6% (1.5%\u201318.1% range, n=36). Median certainty was 0.98.", "advice": "Healthy. These are the decisions to route to a human if you add review.", "evidence": {"threshold": 0.6, "rate": {"rate": 0.05555555555555555, "ci": [0.015369663767066846, 0.18144974107611211], "n": 36, "successes": 2}, "median_certainty": 0.985, "verdict_thresholds": {"ok_below": 0.15, "problem_at_or_above": 0.3}}}, {"id": "config", "title": "Configuration changed mid-stream", "question": "Did the model, wording, options or policy change mid-stream?", "status": "info", "value": "1 axis changed", "detail": "question version: none \u2192 vague-instructions \u2192 rotate-criteria", "advice": "Not a fault \u2014 but any behaviour change in this window has a candidate cause, and before/after comparisons that straddle the switch are comparing two different systems.", "evidence": {"changed": {"question version": ["none", "vague-instructions", "rotate-criteria"]}}}, {"id": "outcomes", "title": "Results are coming back", "question": "Do you know how these decisions actually turned out?", "status": "ok", "value": "36 of 36", "detail": "100% of decisions have a recorded result. Of those, 72.2% (56%\u201384.2% range, n=36) matched it.", "advice": "Accuracy on a subset is only as representative as the subset. If results only come back for the decisions someone reviewed, read it as review accuracy, not workflow accuracy.", "evidence": {"coverage": {"rate": 1.0, "ci": [0.9035781695514236, 1.0], "n": 36, "successes": 36}, "accuracy": {"rate": 0.7222222222222222, "ci": [0.5600719978365485, 0.841518299741862], "n": 36, "successes": 26}}}, {"id": "valid_answers", "title": "Answers fit the options you defined", "question": "Did every answer use your labels, with probabilities adding up to 1?", "status": "ok", "value": "36 / 36", "detail": "All 36 answers were valid.", "advice": "Nothing to do \u2014 this is the one health signal that needs no ground truth, so it keeps working on live traffic.", "evidence": {"per_question": {"intent": {"n": 36, "valid": 36, "adherence": 1.0, "reasons": {}}}, "reasons": {}, "rate": {"rate": 1.0, "ci": [0.9035781695514236, 1.0], "n": 36, "successes": 36}}}, {"id": "wording", "title": "Question wording holds up", "question": "Is anything in the schema vague, subjective or double-barrelled?", "status": "ok", "value": "no issues", "detail": "No question tripped a wording heuristic.", "advice": "These are five simple text heuristics, not a proof. A clean result is not evidence the wording is good.", "evidence": {"issues": []}}], "tiles": [{"label": "Decisions", "value": "36", "note": "across 1 decision point"}, {"label": "Typical certainty", "value": "0.98", "note": "median probability on the chosen answer", "term": "certainty"}, {"label": "Unsure", "value": "5.6%", "note": "below 0.60 \u2014 the human-review pile", "term": "unsure", "tone": "ok"}, {"label": "Speed", "value": "884 ms", "note": "p95 1,046 ms"}, {"label": "Cost per 1,000", "value": "$0.16", "note": "$0.0057 spent on this window"}, {"label": "Accuracy", "value": "72.2%", "note": "on the 36 with a recorded result", "term": "outcome"}], "volume": [{"index": 0, "start": "2026-09-20T15:38:58.839438+00:00", "end": "2026-09-20T15:38:58.839438+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.98, "median_latency_ms": 915, "cost_usd": 0.000161}, {"index": 1, "start": "2026-09-20T15:38:59.760267+00:00", "end": "2026-09-20T15:38:59.760267+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 918, "cost_usd": 0.000161}, {"index": 2, "start": "2026-09-20T15:39:00.584672+00:00", "end": "2026-09-20T15:39:00.584672+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.98, "median_latency_ms": 824, "cost_usd": 0.000161}, {"index": 3, "start": "2026-09-20T15:39:01.592925+00:00", "end": "2026-09-20T15:39:01.592925+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 1007, "cost_usd": 0.000161}, {"index": 4, "start": "2026-09-20T15:39:02.450087+00:00", "end": "2026-09-20T15:39:02.450087+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 856, "cost_usd": 0.000161}, {"index": 5, "start": "2026-09-20T15:39:03.318400+00:00", "end": "2026-09-20T15:39:03.318400+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 868, "cost_usd": 0.000161}, {"index": 6, "start": "2026-09-20T15:39:04.365674+00:00", "end": "2026-09-20T15:39:04.365674+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.99, "median_latency_ms": 1046, "cost_usd": 0.000163}, {"index": 7, "start": "2026-09-20T15:39:05.262914+00:00", "end": "2026-09-20T15:39:05.262914+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 896, "cost_usd": 0.000161}, {"index": 8, "start": "2026-09-20T15:39:06.106840+00:00", "end": "2026-09-20T15:39:06.106840+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.97, "median_latency_ms": 842, "cost_usd": 0.000161}, {"index": 9, "start": "2026-09-20T15:39:06.958698+00:00", "end": "2026-09-20T15:39:06.958698+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.97, "median_latency_ms": 851, "cost_usd": 0.00016}, {"index": 10, "start": "2026-09-20T15:39:07.781908+00:00", "end": "2026-09-20T15:39:07.781908+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.99, "median_latency_ms": 823, "cost_usd": 0.00016}, {"index": 11, "start": "2026-09-20T15:39:08.750515+00:00", "end": "2026-09-20T15:39:08.750515+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 967, "cost_usd": 0.000162}, {"index": 12, "start": "2026-09-20T15:41:22.631347+00:00", "end": "2026-09-20T15:41:22.631347+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 971, "cost_usd": 0.000156}, {"index": 13, "start": "2026-09-20T15:41:23.679407+00:00", "end": "2026-09-20T15:41:23.679407+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 1047, "cost_usd": 0.000156}, {"index": 14, "start": "2026-09-20T15:41:24.548649+00:00", "end": "2026-09-20T15:41:24.548649+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 868, "cost_usd": 0.000156}, {"index": 15, "start": "2026-09-20T15:41:25.441336+00:00", "end": "2026-09-20T15:41:25.441336+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 892, "cost_usd": 0.000156}, {"index": 16, "start": "2026-09-20T15:41:26.325033+00:00", "end": "2026-09-20T15:41:26.325033+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 883, "cost_usd": 0.000157}, {"index": 17, "start": "2026-09-20T15:41:27.226446+00:00", "end": "2026-09-20T15:41:27.226446+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 900, "cost_usd": 0.000156}, {"index": 18, "start": "2026-09-20T15:41:28.208619+00:00", "end": "2026-09-20T15:41:28.208619+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 981, "cost_usd": 0.000158}, {"index": 19, "start": "2026-09-20T15:41:29.114175+00:00", "end": "2026-09-20T15:41:29.114175+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 905, "cost_usd": 0.000156}, {"index": 20, "start": "2026-09-20T15:41:29.996115+00:00", "end": "2026-09-20T15:41:29.996115+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.88, "median_latency_ms": 881, "cost_usd": 0.000156}, {"index": 21, "start": "2026-09-20T15:41:30.898460+00:00", "end": "2026-09-20T15:41:30.898460+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.9, "median_latency_ms": 901, "cost_usd": 0.000155}, {"index": 22, "start": "2026-09-20T15:41:31.922211+00:00", "end": "2026-09-20T15:41:31.922211+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.99, "median_latency_ms": 1023, "cost_usd": 0.000155}, {"index": 23, "start": "2026-09-20T15:41:32.808505+00:00", "end": "2026-09-20T15:41:32.808505+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 1.0, "median_latency_ms": 886, "cost_usd": 0.000157}, {"index": 24, "start": "2026-09-22T04:14:35.513083+00:00", "end": "2026-09-22T04:14:35.513083+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.73, "median_latency_ms": 1020, "cost_usd": 0.000161}, {"index": 25, "start": "2026-09-22T04:14:36.556645+00:00", "end": "2026-09-22T04:14:36.556645+00:00", "n": 1, "unsure_rate": 1.0, "mean_certainty": 0.53, "median_latency_ms": 1043, "cost_usd": 0.000161}, {"index": 26, "start": "2026-09-22T04:14:37.355894+00:00", "end": "2026-09-22T04:14:37.355894+00:00", "n": 1, "unsure_rate": 1.0, "mean_certainty": 0.43, "median_latency_ms": 798, "cost_usd": 0.000161}, {"index": 27, "start": "2026-09-22T04:14:38.084499+00:00", "end": "2026-09-22T04:14:38.084499+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.82, "median_latency_ms": 728, "cost_usd": 0.000161}, {"index": 28, "start": "2026-09-22T04:14:38.779784+00:00", "end": "2026-09-22T04:14:38.779784+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.64, "median_latency_ms": 694, "cost_usd": 0.000161}, {"index": 29, "start": "2026-09-22T04:14:39.489495+00:00", "end": "2026-09-22T04:14:39.489495+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.63, "median_latency_ms": 709, "cost_usd": 0.000161}, {"index": 30, "start": "2026-09-22T04:14:40.184539+00:00", "end": "2026-09-22T04:14:40.184539+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.9400000000000001, "median_latency_ms": 694, "cost_usd": 0.000163}, {"index": 31, "start": "2026-09-22T04:14:40.930232+00:00", "end": "2026-09-22T04:14:40.930232+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.96, "median_latency_ms": 745, "cost_usd": 0.000161}, {"index": 32, "start": "2026-09-22T04:14:41.649403+00:00", "end": "2026-09-22T04:14:41.649403+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.77, "median_latency_ms": 718, "cost_usd": 0.000161}, {"index": 33, "start": "2026-09-22T04:14:42.399889+00:00", "end": "2026-09-22T04:14:42.399889+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.8, "median_latency_ms": 750, "cost_usd": 0.00016}, {"index": 34, "start": "2026-09-22T04:14:43.201261+00:00", "end": "2026-09-22T04:14:43.201261+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.84, "median_latency_ms": 801, "cost_usd": 0.00016}, {"index": 35, "start": "2026-09-22T04:14:44.386627+00:00", "end": "2026-09-22T04:14:44.386627+00:00", "n": 1, "unsure_rate": 0.0, "mean_certainty": 0.91, "median_latency_ms": 1185, "cost_usd": 0.000162}], "actions": [{"action": "status", "share": 0.2777777777777778, "n": 10}, {"action": "refund", "share": 0.2222222222222222, "n": 8}, {"action": "change_address", "share": 0.2222222222222222, "n": 8}, {"action": "other", "share": 0.16666666666666666, "n": 6}, {"action": "cancel", "share": 0.1111111111111111, "n": 4}], "certainty_histogram": [{"low": 0.0, "high": 0.05, "n": 0}, {"low": 0.05, "high": 0.1, "n": 0}, {"low": 0.1, "high": 0.15, "n": 0}, {"low": 0.15, "high": 0.2, "n": 0}, {"low": 0.2, "high": 0.25, "n": 0}, {"low": 0.25, "high": 0.3, "n": 0}, {"low": 0.3, "high": 0.35, "n": 0}, {"low": 0.35, "high": 0.4, "n": 0}, {"low": 0.4, "high": 0.45, "n": 1}, {"low": 0.45, "high": 0.5, "n": 0}, {"low": 0.5, "high": 0.55, "n": 1}, {"low": 0.55, "high": 0.6, "n": 0}, {"low": 0.6, "high": 0.65, "n": 2}, {"low": 0.65, "high": 0.7, "n": 0}, {"low": 0.7, "high": 0.75, "n": 1}, {"low": 0.75, "high": 0.8, "n": 1}, {"low": 0.8, "high": 0.85, "n": 3}, {"low": 0.85, "high": 0.9, "n": 1}, {"low": 0.9, "high": 0.95, "n": 3}, {"low": 0.95, "high": 1.0, "n": 23}], "reliability": [{"low": 0.4, "high": 0.5, "n": 1, "mean_probability": 0.43, "accuracy": 0.0}, {"low": 0.5, "high": 0.6, "n": 1, "mean_probability": 0.53, "accuracy": 0.0}, {"low": 0.6, "high": 0.7, "n": 2, "mean_probability": 0.635, "accuracy": 1.0}, {"low": 0.7, "high": 0.8, "n": 2, "mean_probability": 0.75, "accuracy": 0.0}, {"low": 0.8, "high": 0.9, "n": 4, "mean_probability": 0.835, "accuracy": 0.25}, {"low": 0.9, "high": 1.0, "n": 26, "mean_probability": 0.9838461538461539, "accuracy": 0.8846153846153846}], "nodes": [{"node_id": "intent", "n": 36, "questions": ["intent"], "types": ["choice"], "median_certainty": 0.985, "median_latency_ms": 884, "accuracy": 0.7222222222222222, "labelled": 36, "adherence": 1.0, "top_action": "status"}], "questions": [{"name": "intent", "type": "choice", "instructions": "Select the primary requested action. A mention without a request does not establish intent.", "options": ["cancel", "change_address", "other", "refund", "status"], "k": 5}], "attribution": [{"component": "question", "changed": true, "summary": "question_version changed: ['none', 'vague-instructions'] -> ['rotate-criteria']", "evidence": {"field": "question_version", "reference": ["none", "vague-instructions"], "current": ["rotate-criteria"]}, "node_id": "intent", "behaviour_moved": true}, {"component": "schema", "changed": true, "summary": "question 'intent': instructions rewritten", "evidence": {"question": "intent", "reference": "Pick the best option.", "current": "Select the primary requested action. A mention without a request does not establish intent."}, "node_id": "intent", "behaviour_moved": true}, {"component": "schema", "changed": true, "summary": "question 'intent': criteria reworded for ['cancel', 'change_address', 'other', 'refund', 'status']", "evidence": {"question": "intent", "labels": ["cancel", "change_address", "other", "refund", "status"]}, "node_id": "intent", "behaviour_moved": true}], "decisions": [{"trace_id": "581f77db-5b58-4576-9eca-bef0cbfdc28a", "time": "2026-09-22T04:14:44.386627+00:00", "node_id": "intent", "action": "refund", "certainty": 0.91, "unsure": false, "latency_ms": 1185, "outcome_correct": false, "state": "The cancellation is already done. My question is whether the shipment has arrived.", "answers": [{"question": "intent", "type": "choice", "branch": "refund", "top": [["refund", 0.91], ["status", 0.07], ["change_address", 0.02], ["cancel", 0.0]]}]}, {"trace_id": "bdbd70a6-4bf5-4ceb-bfb7-c779f2248d18", "time": "2026-09-22T04:14:43.201261+00:00", "node_id": "intent", "action": "refund", "certainty": 0.84, "unsure": false, "latency_ms": 801, "outcome_correct": false, "state": "I cancelled yesterday. Was the parcel delivered yet?", "answers": [{"question": "intent", "type": "choice", "branch": "refund", "top": [["refund", 0.84], ["status", 0.13], ["change_address", 0.02], ["cancel", 0.01]]}]}, {"trace_id": "653f237d-6f2e-4bff-a1a2-1f6640b2ad4b", "time": "2026-09-22T04:14:42.399889+00:00", "node_id": "intent", "action": "change_address", "certainty": 0.8, "unsure": false, "latency_ms": 750, "outcome_correct": false, "state": "Thank you; I understand the policy on refunds now.", "answers": [{"question": "intent", "type": "choice", "branch": "change_address", "top": [["change_address", 0.8], ["other", 0.12], ["refund", 0.07], ["status", 0.01]]}]}, {"trace_id": "1716b431-e1f0-4d7e-b7c6-c19f05ebd481", "time": "2026-09-22T04:14:41.649403+00:00", "node_id": "intent", "action": "change_address", "certainty": 0.77, "unsure": false, "latency_ms": 718, "outcome_correct": false, "state": "Your refund policy is clearer now. Thanks for explaining it.", "answers": [{"question": "intent", "type": "choice", "branch": "change_address", "top": [["change_address", 0.77], ["other", 0.14], ["refund", 0.09], ["cancel", 0.0]]}]}, {"trace_id": "422e6958-4c6a-4ca9-896c-8be6f5e1e18c", "time": "2026-09-22T04:14:40.930232+00:00", "node_id": "intent", "action": "status", "certainty": 0.96, "unsure": false, "latency_ms": 745, "outcome_correct": false, "state": "End the membership at the next renewal. No refund requested.", "answers": [{"question": "intent", "type": "choice", "branch": "status", "top": [["status", 0.96], ["cancel", 0.04], ["change_address", 0.0], ["other", 0.0]]}]}, {"trace_id": "3eb3683a-4195-4b69-b763-d14279d611a0", "time": "2026-09-22T04:14:40.184539+00:00", "node_id": "intent", "action": "status", "certainty": 0.9400000000000001, "unsure": false, "latency_ms": 694, "outcome_correct": false, "state": "Stop renewing my subscription after this month; I am not asking for money back.", "answers": [{"question": "intent", "type": "choice", "branch": "status", "top": [["status", 0.9400000000000001], ["cancel", 0.06], ["refund", 0.0], ["change_address", 0.0]]}]}, {"trace_id": "9f11741c-6043-4a5f-9d0f-cb616d09a198", "time": "2026-09-22T04:14:39.489495+00:00", "node_id": "intent", "action": "change_address", "certainty": 0.63, "unsure": false, "latency_ms": 709, "outcome_correct": true, "state": "Please replace my shipping address with the office address before dispatch.", "answers": [{"question": "intent", "type": "choice", "branch": "change_address", "top": [["change_address", 0.63], ["cancel", 0.37], ["other", 0.0], ["status", 0.0]]}]}, {"trace_id": "31f13e2f-697d-4ed7-a989-78e4e56148e0", "time": "2026-09-22T04:14:38.779784+00:00", "node_id": "intent", "action": "change_address", "certainty": 0.64, "unsure": false, "latency_ms": 694, "outcome_correct": true, "state": "The order has not shipped. Send it to my new office instead.", "answers": [{"question": "intent", "type": "choice", "branch": "change_address", "top": [["change_address", 0.64], ["cancel", 0.36], ["refund", 0.0], ["status", 0.0]]}]}, {"trace_id": "f576ffb3-a6e4-4e93-82db-d8b4b6c275fc", "time": "2026-09-22T04:14:38.084499+00:00", "node_id": "intent", "action": "refund", "certainty": 0.82, "unsure": false, "latency_ms": 728, "outcome_correct": false, "state": "Please tell me the package progress. No address changes needed.", "answers": [{"question": "intent", "type": "choice", "branch": "refund", "top": [["refund", 0.82], ["status", 0.15], ["change_address", 0.03], ["other", 0.0]]}]}, {"trace_id": "5d8deec2-783e-4dce-b548-7a1162eedce3", "time": "2026-09-22T04:14:37.355894+00:00", "node_id": "intent", "action": "refund", "certainty": 0.43, "unsure": true, "latency_ms": 798, "outcome_correct": false, "state": "Where is the parcel? Keep the delivery address as it is.", "answers": [{"question": "intent", "type": "choice", "branch": "refund", "top": [["refund", 0.43], ["status", 0.32], ["change_address", 0.24], ["other", 0.01]]}]}, {"trace_id": "5002171c-84af-4e2e-bff6-119e6e1b555d", "time": "2026-09-22T04:14:36.556645+00:00", "node_id": "intent", "action": "other", "certainty": 0.53, "unsure": true, "latency_ms": 1043, "outcome_correct": false, "state": "Keep my subscription active; I only want the second charge refunded.", "answers": [{"question": "intent", "type": "choice", "branch": "other", "top": [["other", 0.53], ["refund", 0.46], ["change_address", 0.01], ["cancel", 0.0]]}]}, {"trace_id": "63fbc6dd-041e-4976-bac1-c9ae8695a0ae", "time": "2026-09-22T04:14:35.513083+00:00", "node_id": "intent", "action": "other", "certainty": 0.73, "unsure": false, "latency_ms": 1020, "outcome_correct": false, "state": "Do not cancel my membership. Please return the duplicate charge.", "answers": [{"question": "intent", "type": "choice", "branch": "other", "top": [["other", 0.73], ["refund", 0.22], ["change_address", 0.02], ["cancel", 0.02]]}]}, {"trace_id": "73eb77e6-8294-4207-a131-14a01d354da2", "time": "2026-09-20T15:41:32.808505+00:00", "node_id": "intent", "action": "status", "certainty": 1.0, "unsure": false, "latency_ms": 886, "outcome_correct": true, "state": "The cancellation is already done. My question is whether the shipment has arrived.", "answers": [{"question": "intent", "type": "choice", "branch": "status", "top": [["status", 1.0], ["other", 0.0], ["cancel", 0.0], ["refund", 0.0]]}]}, {"trace_id": "8e3976cc-275f-478e-a6bc-9130f2988a0f", "time": "2026-09-20T15:41:31.922211+00:00", "node_id": "intent", "action": "status", "certainty": 0.99, "unsure": false, "latency_ms": 1023, "outcome_correct": true, "state": "I cancelled yesterday. Was the parcel delivered yet?", "answers": [{"question": "intent", "type": "choice", "branch": "status", "top": [["status", 0.99], ["cancel", 0.01], ["other", 0.0], ["refund", 0.0]]}]}, {"trace_id": "9f7d4e18-fcf0-4e57-b2ca-ea4d2ae58fd2", "time": "2026-09-20T15:41:30.898460+00:00", "node_id": "intent", "action": "other", "certainty": 0.9, "unsure": false, "latency_ms": 901, "outcome_correct": true, "state": "Thank you; I understand the policy on refunds now.", "answers": [{"question": "intent", "type": "choice", "branch": "other", "top": [["other", 0.9], ["refund", 0.1], ["status", 0.0], ["cancel", 0.0]]}]}, {"trace_id": "c936c32e-ce2f-4dc7-8853-12186c67da24", "time": "2026-09-20T15:41:29.996115+00:00", "node_id": "intent", "action": "other", "certainty": 0.88, "unsure": false, "latency_ms": 881, "outcome_correct": true, "state": "Your refund policy is clearer now. Thanks for explaining it.", "answers": [{"question": "intent", "type": "choice", "branch": "other", "top": [["other", 0.88], ["refund", 0.12], ["change_address", 0.0], ["status", 0.0]]}]}, {"trace_id": "809b3106-f88d-4dc6-9aa1-ebeedd4f2bbd", "time": "2026-09-20T15:41:29.114175+00:00", "node_id": "intent", "action": "cancel", "certainty": 1.0, "unsure": false, "latency_ms": 905, "outcome_correct": true, "state": "End the membership at the next renewal. No refund requested.", "answers": [{"question": "intent", "type": "choice", "branch": "cancel", "top": [["cancel", 1.0], ["status", 0.0], ["change_address", 0.0], ["refund", 0.0]]}]}, {"trace_id": "aafd27ce-6c20-4a3f-b191-1ff6346c1bb0", "time": "2026-09-20T15:41:28.208619+00:00", "node_id": "intent", "action": "cancel", "certainty": 1.0, "unsure": false, "latency_ms": 981, "outcome_correct": true, "state": "Stop renewing my subscription after this month; I am not asking for money back.", "answers": [{"question": "intent", "type": "choice", "branch": "cancel", "top": [["cancel", 1.0], ["status", 0.0], ["refund", 0.0], ["other", 0.0]]}]}, {"trace_id": "b864d2b1-3154-41b2-a5d7-36f44b3428ea", "time": "2026-09-20T15:41:27.226446+00:00", "node_id": "intent", "action": "change_address", "certainty": 1.0, "unsure": false, "latency_ms": 900, "outcome_correct": true, "state": "Please replace my shipping address with the office address before dispatch.", "answers": [{"question": "intent", "type": "choice", "branch": "change_address", "top": [["change_address", 1.0], ["other", 0.0], ["status", 0.0], ["refund", 0.0]]}]}, {"trace_id": "108b6324-9af2-46f2-bef2-b29ad1722516", "time": "2026-09-20T15:41:26.325033+00:00", "node_id": "intent", "action": "change_address", "certainty": 1.0, "unsure": false, "latency_ms": 883, "outcome_correct": true, "state": "The order has not shipped. Send it to my new office instead.", "answers": [{"question": "intent", "type": "choice", "branch": "change_address", "top": [["change_address", 1.0], ["other", 0.0], ["cancel", 0.0], ["status", 0.0]]}]}, {"trace_id": "18d6ea4c-dff4-4b92-99de-53492cf3bac4", "time": "2026-09-20T15:41:25.441336+00:00", "node_id": "intent", "action": "status", "certainty": 1.0, "unsure": false, "latency_ms": 892, "outcome_correct": true, "state": "Please tell me the package progress. No address changes needed.", "answers": [{"question": "intent", "type": "choice", "branch": "status", "top": [["status", 1.0], ["cancel", 0.0], ["refund", 0.0], ["other", 0.0]]}]}, {"trace_id": "5938d43b-d35b-4b97-a1d3-f8804df377db", "time": "2026-09-20T15:41:24.548649+00:00", "node_id": "intent", "action": "status", "certainty": 1.0, "unsure": false, "latency_ms": 868, "outcome_correct": true, "state": "Where is the parcel? Keep the delivery address as it is.", "answers": [{"question": "intent", "type": "choice", "branch": "status", "top": [["status", 1.0], ["refund", 0.0], ["change_address", 0.0], ["cancel", 0.0]]}]}, {"trace_id": "d407263a-5c95-492c-8fc5-e28570039750", "time": "2026-09-20T15:41:23.679407+00:00", "node_id": "intent", "action": "refund", "certainty": 1.0, "unsure": false, "latency_ms": 1047, "outcome_correct": true, "state": "Keep my subscription active; I only want the second charge refunded.", "answers": [{"question": "intent", "type": "choice", "branch": "refund", "top": [["refund", 1.0], ["status", 0.0], ["other", 0.0], ["change_address", 0.0]]}]}, {"trace_id": "2c29c5fe-55be-428a-9121-c6d26ca57c37", "time": "2026-09-20T15:41:22.631347+00:00", "node_id": "intent", "action": "refund", "certainty": 1.0, "unsure": false, "latency_ms": 971, "outcome_correct": true, "state": "Do not cancel my membership. Please return the duplicate charge.", "answers": [{"question": "intent", "type": "choice", "branch": "refund", "top": [["refund", 1.0], ["change_address", 0.0], ["cancel", 0.0], ["status", 0.0]]}]}, {"trace_id": "b2c2818d-a4c3-4d8e-a71b-1f3427161f38", "time": "2026-09-20T15:39:08.750515+00:00", "node_id": "intent", "action": "status", "certainty": 1.0, "unsure": false, "latency_ms": 967, "outcome_correct": true, "state": "The cancellation is already done. My question is whether the shipment has arrived.", "answers": [{"question": "intent", "type": "choice", "branch": "status", "top": [["status", 1.0], ["other", 0.0], ["change_address", 0.0], ["cancel", 0.0]]}]}, {"trace_id": "0bbfea13-ea14-4029-96e8-803f39717d28", "time": "2026-09-20T15:39:07.781908+00:00", "node_id": "intent", "action": "status", "certainty": 0.99, "unsure": false, "latency_ms": 823, "outcome_correct": true, "state": "I cancelled yesterday. Was the parcel delivered yet?", "answers": [{"question": "intent", "type": "choice", "branch": "status", "top": [["status", 0.99], ["cancel", 0.01], ["other", 0.0], ["refund", 0.0]]}]}, {"trace_id": "56b9bf4a-0589-43a8-9815-1902c6e98853", "time": "2026-09-20T15:39:06.958698+00:00", "node_id": "intent", "action": "other", "certainty": 0.97, "unsure": false, "latency_ms": 851, "outcome_correct": true, "state": "Thank you; I understand the policy on refunds now.", "answers": [{"question": "intent", "type": "choice", "branch": "other", "top": [["other", 0.97], ["refund", 0.03], ["change_address", 0.0], ["status", 0.0]]}]}, {"trace_id": "ea8ad0c0-9eb9-4ce7-a560-9de697f25c72", "time": "2026-09-20T15:39:06.106840+00:00", "node_id": "intent", "action": "other", "certainty": 0.97, "unsure": false, "latency_ms": 842, "outcome_correct": true, "state": "Your refund policy is clearer now. Thanks for explaining it.", "answers": [{"question": "intent", "type": "choice", "branch": "other", "top": [["other", 0.97], ["refund", 0.03], ["cancel", 0.0], ["change_address", 0.0]]}]}, {"trace_id": "925cd40f-b3df-48a5-8d1b-d30089140b20", "time": "2026-09-20T15:39:05.262914+00:00", "node_id": "intent", "action": "cancel", "certainty": 1.0, "unsure": false, "latency_ms": 896, "outcome_correct": true, "state": "End the membership at the next renewal. No refund requested.", "answers": [{"question": "intent", "type": "choice", "branch": "cancel", "top": [["cancel", 1.0], ["status", 0.0], ["other", 0.0], ["refund", 0.0]]}]}, {"trace_id": "e68e43f9-01d3-40f4-b9e4-dbab6e543f69", "time": "2026-09-20T15:39:04.365674+00:00", "node_id": "intent", "action": "cancel", "certainty": 0.99, "unsure": false, "latency_ms": 1046, "outcome_correct": true, "state": "Stop renewing my subscription after this month; I am not asking for money back.", "answers": [{"question": "intent", "type": "choice", "branch": "cancel", "top": [["cancel", 0.99], ["other", 0.01], ["refund", 0.0], ["change_address", 0.0]]}]}, {"trace_id": "8850dce5-c453-40e9-9e60-26d80389fd1e", "time": "2026-09-20T15:39:03.318400+00:00", "node_id": "intent", "action": "change_address", "certainty": 1.0, "unsure": false, "latency_ms": 868, "outcome_correct": true, "state": "Please replace my shipping address with the office address before dispatch.", "answers": [{"question": "intent", "type": "choice", "branch": "change_address", "top": [["change_address", 1.0], ["status", 0.0], ["other", 0.0], ["refund", 0.0]]}]}, {"trace_id": "a85ecb79-405e-4458-a9ba-20109133ed7e", "time": "2026-09-20T15:39:02.450087+00:00", "node_id": "intent", "action": "change_address", "certainty": 1.0, "unsure": false, "latency_ms": 856, "outcome_correct": true, "state": "The order has not shipped. Send it to my new office instead.", "answers": [{"question": "intent", "type": "choice", "branch": "change_address", "top": [["change_address", 1.0], ["refund", 0.0], ["status", 0.0], ["other", 0.0]]}]}, {"trace_id": "5d34e0d0-f397-403d-acab-d72cb596e6e6", "time": "2026-09-20T15:39:01.592925+00:00", "node_id": "intent", "action": "status", "certainty": 1.0, "unsure": false, "latency_ms": 1007, "outcome_correct": true, "state": "Please tell me the package progress. No address changes needed.", "answers": [{"question": "intent", "type": "choice", "branch": "status", "top": [["status", 1.0], ["other", 0.0], ["cancel", 0.0], ["refund", 0.0]]}]}, {"trace_id": "60149746-3abb-4692-b303-c7f651a86792", "time": "2026-09-20T15:39:00.584672+00:00", "node_id": "intent", "action": "status", "certainty": 0.98, "unsure": false, "latency_ms": 824, "outcome_correct": true, "state": "Where is the parcel? Keep the delivery address as it is.", "answers": [{"question": "intent", "type": "choice", "branch": "status", "top": [["status", 0.98], ["other", 0.02], ["cancel", 0.0], ["refund", 0.0]]}]}, {"trace_id": "2d6b7852-e090-4947-968a-c99b4d265a7a", "time": "2026-09-20T15:38:59.760267+00:00", "node_id": "intent", "action": "refund", "certainty": 1.0, "unsure": false, "latency_ms": 918, "outcome_correct": true, "state": "Keep my subscription active; I only want the second charge refunded.", "answers": [{"question": "intent", "type": "choice", "branch": "refund", "top": [["refund", 1.0], ["other", 0.0], ["status", 0.0], ["change_address", 0.0]]}]}, {"trace_id": "5cd37121-5906-4490-9cb5-5e256da5ef5b", "time": "2026-09-20T15:38:58.839438+00:00", "node_id": "intent", "action": "refund", "certainty": 0.98, "unsure": false, "latency_ms": 915, "outcome_correct": true, "state": "Do not cancel my membership. Please return the duplicate charge.", "answers": [{"question": "intent", "type": "choice", "branch": "refund", "top": [["refund", 0.98], ["cancel", 0.02], ["status", 0.0], ["other", 0.0]]}]}], "glossary": {"decision": "One call to the decision model: your inputs go in, a probability over your options comes out, your code picks a branch.", "certainty": "How much probability the model put on its top answer. 1.00 means all of it; 0.34 out of three options means it was almost guessing.", "unsure": "A decision where the top answer got less probability than your review threshold \u2014 the ones worth sending to a human.", "options": "The labels you defined for a question. The model must answer with one of them, and the probabilities across them must add up to 1.", "valid answer": "An answer that used exactly your labels and whose probabilities add up to 1. Checking this needs no ground truth, so it works on live traffic.", "drift": "Recent traffic behaving differently from earlier traffic at the same decision point \u2014 different answers, or different certainty.", "confidence interval": "The range the true rate is probably in. A rate measured on 30 decisions is a wide range, not a precise number.", "calibration": "Whether stated certainty matches reality: of the decisions made at 80% certainty, about 80% should turn out right.", "calibration gap": "Average distance between stated certainty and how often those decisions were actually right. 0 is perfect; above 0.1 is worth a look.", "outcome": "What actually happened after the decision \u2014 the human's correction, the click, the refund that went through. You attach it with record_outcome().", "decision point": "One place in your workflow that asks the model something. EvalJev tracks each separately, because they fail separately.", "attribution": "Naming which part changed \u2014 the question wording, the options, the model version, the inputs \u2014 by diffing what was recorded on the traces.", "statistically real": "Unlikely to be a coincidence of small numbers. EvalJev uses exact tests, so a change only counts once the evidence supports it."}};
+</script>
+<script>
+(function () {
+  "use strict";
+
+  let D = window.EVALJEV_REPORT;
+  if (typeof D === "string") {
+    document.body.innerHTML =
+      '<div class="wrap" style="padding:60px 0"><h1>No report data</h1>' +
+      "<p>This file is the EvalJev page template. Render it with " +
+      "<code>evaljev report traces.jsonl -o report.html</code>.</p></div>";
+    return;
+  }
+
+  /* ---------- small helpers ---------- */
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) =>
+    String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const num = (x, n = 2) => (x == null || Number.isNaN(x) ? "—" : Number(x).toFixed(n));
+  const pct = (x, n = 1) => (x == null ? "—" : (100 * x).toFixed(n).replace(/\.0$/, "") + "%");
+  const int = (x) => (x == null ? "—" : Number(x).toLocaleString());
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  /* Axis ticks people can read: 0 / 25 / 50, never 0 / 27 / 55. */
+  const niceStep = (v) => {
+    if (!(v > 0)) return 1;
+    const exp = Math.pow(10, Math.floor(Math.log10(v)));
+    const f = v / exp;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * exp;
+  };
+  const axisMax = (dataMax, { integer = false } = {}) => {
+    let step = niceStep((dataMax || 1) / 4);
+    if (integer) step = Math.max(1, Math.ceil(step));
+    return step * 4;
+  };
+  const svgEl = (tag, attrs, text) => {
+    const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const k in attrs) if (attrs[k] != null) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  const STATUS = {
+    ok: { label: "Healthy", mark: "✓" },
+    watch: { label: "Worth a look", mark: "!" },
+    problem: { label: "Needs attention", mark: "!" },
+    unknown: { label: "Not measured", mark: "?" },
+    info: { label: "For information", mark: "i" },
+  };
+  const pill = (status) =>
+    `<span class="pill ${esc(status)}"><span class="dot"></span>${esc(
+      (STATUS[status] || STATUS.info).label)}</span>`;
+
+  function timeLabel(iso, withDate) {
+    const d = new Date(iso);
+    if (Number.isNaN(+d)) return String(iso);
+    const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return withDate ? d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + t : t;
+  }
+
+  /* Wrap a phrase in its glossary definition, so no jargon appears undefined. */
+  function term(key, label) {
+    const def = D.glossary && D.glossary[key];
+    if (!def) return esc(label || key);
+    return `<span class="term" data-def="${esc(def)}">${esc(label || key)}</span>`;
+  }
+
+  /* ---------- tooltip ---------- */
+  const tip = $("#tip");
+  function showTip(html, e) {
+    tip.innerHTML = html;
+    tip.style.opacity = "1";
+    const pad = 14;
+    let x = e.clientX + pad, y = e.clientY + pad;
+    const r = tip.getBoundingClientRect();
+    if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
+    if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  }
+  const hideTip = () => (tip.style.opacity = "0");
+  function bindTip(node, html) {
+    node.classList.add("hit");
+    node.addEventListener("pointerenter", (e) => showTip(html, e));
+    node.addEventListener("pointermove", (e) => showTip(html, e));
+    node.addEventListener("pointerleave", hideTip);
+  }
+  function bindGlossary(root) {
+    (root || document).querySelectorAll(".term").forEach((n) => {
+      if (n.dataset.bound) return;
+      n.dataset.bound = "1";
+      n.addEventListener("pointerenter", (e) => showTip(esc(n.dataset.def), e));
+      n.addEventListener("pointermove", (e) => showTip(esc(n.dataset.def), e));
+      n.addEventListener("pointerleave", hideTip);
+    });
+  }
+  addEventListener("scroll", hideTip, { passive: true });
+
+  /* ---------- charts ---------- */
+
+  /* Columns over an ordered series. One measure, one hue — never two y-scales. */
+  function columnChart(mount, rows, opts) {
+    const W = 680, H = 200, padL = 46, padR = 12, padT = 12, padB = 30;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const max = opts.max != null ? opts.max
+      : axisMax(Math.max(...rows.map((r) => r.value || 0)), { integer: opts.integer });
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opts.aria });
+
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + (plotH * i) / 4;
+      const v = max * (1 - i / 4);
+      svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y, y2: y, class: "grid-line" }));
+      svg.appendChild(svgEl("text", { x: padL - 8, y: y + 4, class: "axis-text", "text-anchor": "end" },
+        opts.tickFmt ? opts.tickFmt(v) : int(Math.round(v))));
+    }
+    const band = plotW / rows.length;
+    const barW = Math.min(24, Math.max(3, band - 2));
+    rows.forEach((r, i) => {
+      const h = Math.max(1, ((r.value || 0) / max) * plotH);
+      const x = padL + i * band + (band - barW) / 2;
+      const y = padT + plotH - h;
+      const bar = svgEl("rect", { x, y, width: barW, height: h, rx: Math.min(4, barW / 2),
+        fill: opts.color || css("--series-1") });
+      bindTip(bar, r.tip);
+      svg.appendChild(bar);
+    });
+    // Label the ends of the axis only — a label per column is unreadable.
+    if (rows.length) {
+      svg.appendChild(svgEl("text", { x: padL, y: H - 8, class: "axis-text" }, rows[0].label));
+      svg.appendChild(svgEl("text", { x: W - padR, y: H - 8, class: "axis-text", "text-anchor": "end" },
+        rows[rows.length - 1].label));
+    }
+    mount.replaceChildren(svg);
+  }
+
+  /* A single measure over time: 2px line, wash below it, marker on the last point. */
+  function lineChart(mount, rows, opts) {
+    const W = 680, H = 200, padL = 46, padR = 20, padT = 12, padB = 30;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const values = rows.map((r) => r.value).filter((v) => v != null);
+    if (!values.length) { mount.innerHTML = '<p class="empty">Nothing recorded for this window.</p>'; return; }
+    const max = opts.max != null ? opts.max : axisMax(Math.max(...values));
+    const x = (i) => padL + (rows.length === 1 ? plotW / 2 : (plotW * i) / (rows.length - 1));
+    const y = (v) => padT + plotH - (v / max) * plotH;
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opts.aria });
+
+    for (let i = 0; i <= 4; i++) {
+      const gy = padT + (plotH * i) / 4;
+      svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: gy, y2: gy, class: "grid-line" }));
+      svg.appendChild(svgEl("text", { x: padL - 8, y: gy + 4, class: "axis-text", "text-anchor": "end" },
+        opts.tickFmt ? opts.tickFmt(max * (1 - i / 4)) : num(max * (1 - i / 4), 2)));
+    }
+    const pts = rows.map((r, i) => (r.value == null ? null : [x(i), y(r.value)])).filter(Boolean);
+    const color = opts.color || css("--series-1");
+    if (pts.length > 1) {
+      svg.appendChild(svgEl("path", {
+        d: `M${pts[0][0]},${padT + plotH} L` + pts.map((p) => p.join(",")).join(" L") +
+           ` L${pts[pts.length - 1][0]},${padT + plotH} Z`,
+        fill: color, opacity: 0.1,
+      }));
+    }
+    svg.appendChild(svgEl("path", {
+      d: "M" + pts.map((p) => p.join(",")).join(" L"),
+      fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+    }));
+    const last = pts[pts.length - 1];
+    svg.appendChild(svgEl("circle", { cx: last[0], cy: last[1], r: 4.5, fill: color,
+      stroke: css("--surface-1"), "stroke-width": 2 }));
+    // Hover bands, so the hit target is the slice and not the 2px line.
+    rows.forEach((r, i) => {
+      if (r.value == null) return;
+      const band = plotW / Math.max(1, rows.length - 1);
+      const hit = svgEl("rect", { x: x(i) - band / 2, y: padT, width: band, height: plotH, fill: "transparent" });
+      bindTip(hit, r.tip);
+      svg.appendChild(hit);
+    });
+    if (rows.length) {
+      svg.appendChild(svgEl("text", { x: padL, y: H - 8, class: "axis-text" }, rows[0].label));
+      svg.appendChild(svgEl("text", { x: W - padR, y: H - 8, class: "axis-text", "text-anchor": "end" },
+        rows[rows.length - 1].label));
+    }
+    svg.appendChild(svgEl("text", { x: last[0], y: last[1] - 12, class: "value-text", "text-anchor": "end" },
+      opts.tickFmt ? opts.tickFmt(rows[rows.length - 1].value) : num(rows[rows.length - 1].value, 2)));
+    mount.replaceChildren(svg);
+  }
+
+  /* Horizontal bars for categories: value at the tip, label outside the plot. */
+  function barChart(mount, rows, opts) {
+    const W = 680, rowH = 30, padL = opts.padL || 130, padR = 70, padT = 6;
+    const H = padT + rows.length * rowH + 26;
+    const plotW = W - padL - padR;
+    const max = axisMax(Math.max(...rows.map((r) => r.value)));
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opts.aria });
+    for (let i = 0; i <= 4; i++) {
+      const gx = padL + (plotW * i) / 4;
+      svg.appendChild(svgEl("line", { x1: gx, x2: gx, y1: padT, y2: padT + rows.length * rowH, class: "grid-line" }));
+      svg.appendChild(svgEl("text", { x: gx, y: H - 8, class: "axis-text", "text-anchor": "middle" },
+        opts.tickFmt ? opts.tickFmt((max * i) / 4) : num((max * i) / 4, 2)));
+    }
+    rows.forEach((r, i) => {
+      const y = padT + i * rowH + 5;
+      const w = Math.max(2, (r.value / max) * plotW);
+      svg.appendChild(svgEl("text", { x: padL - 10, y: y + 13, class: "label-text", "text-anchor": "end" },
+        r.label.length > 20 ? r.label.slice(0, 19) + "…" : r.label));
+      const bar = svgEl("rect", { x: padL, y, width: w, height: 18, rx: 4, fill: css("--series-1") });
+      bindTip(bar, r.tip);
+      svg.appendChild(bar);
+      svg.appendChild(svgEl("text", { x: padL + w + 8, y: y + 13, class: "value-text" }, r.display));
+    });
+    mount.replaceChildren(svg);
+  }
+
+  /* Distribution of certainty, split at the review threshold. Two categories,
+     so a legend is present and the split is also marked on the axis. */
+  function histogramChart(mount, rows, threshold) {
+    const W = 680, H = 262, padL = 46, padR = 14, padT = 14, padB = 40;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const max = axisMax(Math.max(...rows.map((r) => r.n)), { integer: true });
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+      "aria-label": "Distribution of certainty across decisions" });
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + (plotH * i) / 4;
+      svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y, y2: y, class: "grid-line" }));
+      svg.appendChild(svgEl("text", { x: padL - 8, y: y + 4, class: "axis-text", "text-anchor": "end" },
+        int(Math.round(max * (1 - i / 4)))));
+    }
+    const band = plotW / rows.length;
+    rows.forEach((r, i) => {
+      if (!r.n) return;
+      const h = Math.max(2, (r.n / max) * plotH);
+      const x = padL + i * band + 1;
+      const w = Math.max(2, band - 2);
+      const unsure = r.high <= threshold;
+      const bar = svgEl("rect", { x, y: padT + plotH - h, width: w, height: h, rx: 3,
+        fill: unsure ? css("--series-2") : css("--series-1") });
+      bindTip(bar, `<strong>${num(r.low, 2)}–${num(r.high, 2)} certainty</strong><br>${int(r.n)} decision(s)` +
+        (unsure ? "<br>below your review line" : ""));
+      svg.appendChild(bar);
+    });
+    const tx = padL + threshold * plotW;
+    svg.appendChild(svgEl("line", { x1: tx, x2: tx, y1: padT - 6, y2: padT + plotH, class: "rule" }));
+    svg.appendChild(svgEl("text", { x: tx + 5, y: padT + 2, class: "axis-text" }, `review line ${num(threshold, 2)}`));
+    [0, 0.25, 0.5, 0.75, 1].forEach((p) => {
+      svg.appendChild(svgEl("text", { x: padL + p * plotW, y: H - 12, class: "axis-text", "text-anchor": "middle" },
+        num(p, 2)));
+    });
+    svg.appendChild(svgEl("text", { x: padL + plotW / 2, y: H - 0, class: "axis-text", "text-anchor": "middle" },
+      "probability on the chosen option"));
+    mount.replaceChildren(svg);
+  }
+
+  /* Stated probability against observed outcome, with the perfect-agreement diagonal. */
+  function reliabilityChart(mount, rows) {
+    const W = 680, H = 300, padL = 52, padR = 18, padT = 14, padB = 44;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const x = (v) => padL + v * plotW;
+    const y = (v) => padT + plotH - v * plotH;
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+      "aria-label": "Stated probability against observed frequency" });
+    for (let i = 0; i <= 4; i++) {
+      const gy = padT + (plotH * i) / 4, gx = padL + (plotW * i) / 4;
+      svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: gy, y2: gy, class: "grid-line" }));
+      svg.appendChild(svgEl("text", { x: padL - 8, y: gy + 4, class: "axis-text", "text-anchor": "end" },
+        pct(1 - i / 4, 0)));
+      svg.appendChild(svgEl("text", { x: gx, y: H - 24, class: "axis-text", "text-anchor": "middle" },
+        num(i / 4, 2)));
+    }
+    svg.appendChild(svgEl("line", { x1: x(0), y1: y(0), x2: x(1), y2: y(1), class: "rule" }));
+    svg.appendChild(svgEl("text", { x: x(0.72), y: y(0.72) - 8, class: "axis-text" }, "perfect agreement"));
+    svg.appendChild(svgEl("text", { x: padL + plotW / 2, y: H - 6, class: "axis-text", "text-anchor": "middle" },
+      "probability the model stated"));
+    svg.appendChild(svgEl("text", { x: 12, y: padT + plotH / 2, class: "axis-text",
+      transform: `rotate(-90 12 ${padT + plotH / 2})`, "text-anchor": "middle" }, "how often it held up"));
+    const maxN = Math.max(...rows.map((r) => r.n)) || 1;
+    rows.forEach((r) => {
+      const radius = 5 + 7 * Math.sqrt(r.n / maxN);
+      const dot = svgEl("circle", { cx: x(r.mean_probability), cy: y(r.accuracy), r: radius,
+        fill: css("--series-1"), stroke: css("--surface-1"), "stroke-width": 2 });
+      bindTip(dot, `<strong>stated ${num(r.mean_probability, 2)}</strong><br>held up ${pct(r.accuracy)} of the time` +
+        `<br>${int(r.n)} decision(s) in this band`);
+      svg.appendChild(dot);
+    });
+    mount.replaceChildren(svg);
+  }
+
+  /* ---------- page sections ---------- */
+
+  function renderHeader() {
+    const m = D.meta, h = D.headline;
+    const span = new Date(m.last_seen) - new Date(m.first_seen);
+    const multiday = span > 24 * 3600 * 1000;
+    document.title = m.title + " — EvalJev";
+    $("#topbar-scope").textContent = m.workflow_id;
+    $("#scope").textContent =
+      `${int(m.n)} decisions · ${m.nodes.length} decision point${m.nodes.length === 1 ? "" : "s"} · ` +
+      `${timeLabel(m.first_seen, true)} → ${timeLabel(m.last_seen, multiday)} · ` +
+      `${m.models.length ? m.models.join(", ") : "model not recorded"}`;
+
+    const mark = $("#verdict-mark");
+    mark.className = "mark " + h.status;
+    mark.textContent = STATUS[h.status].mark;
+    $("#verdict-title").textContent =
+      h.status === "ok" ? "Looks healthy" :
+      h.status === "watch" ? "Mostly healthy" : "Needs attention";
+    $("#verdict-summary").innerHTML = esc(h.summary) +
+      ` <span class="muted">(health score ${h.score}/100 — 25 points off per problem, 8 per warning.)</span>`;
+    $("#verdict-unknown").innerHTML = h.unknown.length
+      ? "Not enough data to answer: " +
+        h.unknown.map((t) => "\u201c" + esc(t) + "\u201d").join(", ") +
+        (h.unknown.length === 1 ? ". Nothing is claimed about it." : ". Nothing is claimed about those.")
+      : "";
+
+    $("#tiles").innerHTML = D.tiles.map((t) => `
+      <div class="tile ${esc(t.tone && t.tone !== "ok" ? t.tone : "")}">
+        <div class="k">${t.term ? term(t.term, t.label) : esc(t.label)}</div>
+        <div class="v">${esc(t.value)}</div>
+        <div class="n">${esc(t.note)}</div>
+      </div>`).join("");
+
+    $("#footer-provenance").innerHTML =
+      `Generated ${esc(timeLabel(m.generated_at, true))} by EvalJev from ${int(m.n)} recorded ` +
+      `decisions. Every number here was computed by the library from the traces — nothing on ` +
+      `this page was written by a model.`;
+
+    const note = $("#note");
+    note.hidden = !m.note;
+    if (m.note) note.innerHTML = m.note;
+
+    $("#links").innerHTML = (m.links || [])
+      .map((l) => `<a class="ghost" href="${esc(l.href)}">${esc(l.label)}</a>`)
+      .join("");
+
+    const live = $("#live-badge");
+    live.innerHTML = m.live_interval_ms
+      ? `<span class="pill ok"><span class="dot"></span>live</span>` : "";
+  }
+
+  function renderChecks() {
+    $("#check-list").innerHTML = D.checks.map((c, i) => `
+      <details class="check" ${c.status === "problem" || (i === 0 && c.status === "watch") ? "open" : ""}>
+        <summary>
+          ${pill(c.status)}
+          <span class="title">${esc(c.title)}</span>
+          <span class="value">${esc(c.value)}</span>
+          <span class="caret">details</span>
+        </summary>
+        <div class="body">
+          <p class="q">${esc(c.question)}</p>
+          <p class="detail">${esc(c.detail)}</p>
+          <p class="advice"><b>What to do:</b> ${esc(c.advice)}</p>
+          ${Object.keys(c.evidence || {}).length ? `
+            <details class="evidence"><summary>Numbers behind this check</summary>
+              <pre><code>${esc(JSON.stringify(c.evidence, null, 2))}</code></pre>
+            </details>` : ""}
+        </div>
+      </details>`).join("");
+  }
+
+  function renderActivity() {
+    const v = D.volume;
+    const multiday = new Date(D.meta.last_seen) - new Date(D.meta.first_seen) > 24 * 3600 * 1000;
+    $("#volume-sub").textContent =
+      `${int(D.meta.n)} decisions in ${v.length} slice${v.length === 1 ? "" : "s"} of about ` +
+      `${v.length ? v[0].n : 0}.`;
+    columnChart($("#chart-volume"), v.map((r) => ({
+      value: r.n,
+      label: timeLabel(r.start, multiday),
+      tip: `<strong>${timeLabel(r.start, true)}</strong><br>${int(r.n)} decisions<br>` +
+        `avg certainty ${num(r.mean_certainty, 2)}<br>median ${int(r.median_latency_ms)} ms`,
+    })), { aria: "Decisions per time slice", integer: true, tickFmt: (x) => int(Math.round(x)) });
+
+    const hasUnsure = v.some((r) => r.unsure_rate != null);
+    $("#unsure-sub").textContent = hasUnsure
+      ? `Decisions below the ${num(D.meta.unsure_below, 2)} review line, slice by slice. A rising line means the model is getting less certain about the traffic it is being sent.`
+      : "No distributions recorded.";
+    lineChart($("#chart-unsure"), v.map((r) => ({
+      value: r.unsure_rate,
+      label: timeLabel(r.start, multiday),
+      tip: `<strong>${timeLabel(r.start, true)}</strong><br>${pct(r.unsure_rate)} unsure<br>of ${int(r.n)} decisions`,
+    })), { aria: "Share of unsure decisions over time", tickFmt: (x) => pct(x, 0),
+           color: css("--series-2") });
+  }
+
+  function renderCertainty() {
+    const threshold = D.meta.unsure_below;
+    $("#legend-certainty").innerHTML =
+      `<span><span class="sw" style="background:${css("--series-1")}"></span>confident enough to act on</span>` +
+      `<span><span class="sw" style="background:${css("--series-2")}"></span>below your review line (${num(threshold, 2)})</span>`;
+    histogramChart($("#chart-certainty"), D.certainty_histogram, threshold);
+    const total = D.certainty_histogram.reduce((a, r) => a + r.n, 0);
+    const unsure = D.certainty_histogram.filter((r) => r.high <= threshold).reduce((a, r) => a + r.n, 0);
+    $("#certainty-takeaway").innerHTML =
+      `${int(unsure)} of ${int(total)} decisions (${pct(total ? unsure / total : 0)}) fell below the line. ` +
+      `Those are the ones a human would see if you add review — and the pile whose size you want to watch, ` +
+      `because it grows before accuracy falls.`;
+
+    if (!D.reliability || D.reliability.length < 2) {
+      $("#reliability-card").innerHTML =
+        `<h3>Was that certainty earned?</h3>` +
+        `<p class="empty">Not yet — this needs ${term("outcome", "recorded outcomes")} to compare against. ` +
+        `Call <code>monitor.record_outcome(...)</code> when you learn what actually happened, and the ` +
+        `curve appears here.</p>`;
+      return;
+    }
+    reliabilityChart($("#chart-reliability"), D.reliability);
+    const calib = D.checks.find((c) => c.id === "calibration");
+    $("#reliability-takeaway").innerHTML =
+      `Each dot is one band of stated probability, sized by how many decisions landed in it. ` +
+      `Dots on the dashed line mean the stated number can be taken at face value; above it the ` +
+      `model is under-selling itself, below it is over-claiming. ` + esc(calib ? calib.detail : "");
+  }
+
+  function renderBehaviour() {
+    const actions = D.actions.slice(0, 12);
+    $("#actions-sub").textContent =
+      D.actions.length > 12 ? `Top 12 of ${D.actions.length} branches, by share of traffic.`
+                            : "Share of traffic by branch.";
+    barChart($("#chart-actions"), actions.map((a) => ({
+      label: a.action == null ? "(no action)" : String(a.action),
+      value: a.share,
+      display: pct(a.share, 0),
+      tip: `<strong>${esc(a.action)}</strong><br>${int(a.n)} decisions<br>${pct(a.share)} of traffic`,
+    })), { aria: "Share of decisions by branch", tickFmt: (x) => pct(x, 0) });
+
+    $("#node-table").querySelector("tbody").innerHTML = D.nodes.map((n) => `
+      <tr>
+        <td><code>${esc(n.node_id)}</code></td>
+        <td class="muted">${esc(n.questions.join(", "))} <span class="muted">(${esc(n.types.join("/"))})</span></td>
+        <td class="num">${int(n.n)}</td>
+        <td class="num">${num(n.median_certainty, 2)}</td>
+        <td class="num">${n.adherence == null ? '<span class="muted">n/a</span>' : pct(n.adherence, 0)}</td>
+        <td class="num">${n.median_latency_ms == null ? "—" : int(n.median_latency_ms) + " ms"}</td>
+        <td class="num">${n.accuracy == null ? '<span class="muted">no results</span>'
+          : pct(n.accuracy, 0) + ` <span class="muted">(${int(n.labelled)})</span>`}</td>
+      </tr>`).join("");
+  }
+
+  function renderChanged() {
+    const rows = D.attribution || [];
+    const card = $("#changed-card");
+    if (!rows.length) {
+      card.innerHTML =
+        `<p class="empty">Nothing changed. Across this window the wording, the option sets, the ` +
+        `model version, the policy version and the shape of the inputs are all identical, which is ` +
+        `what makes the comparisons above meaningful.</p>` +
+        `<p class="takeaway">One caveat worth knowing: the input check is structural — it sees a new ` +
+        `or missing field, not a change in what your users are actually writing. A clean result here ` +
+        `is not proof the traffic is the same.</p>`;
+      return;
+    }
+    // The same change usually lands on several decision points at once; showing it
+    // once with the list of where keeps the panel about changes, not about rows.
+    const grouped = [];
+    const seen = new Map();
+    rows.forEach((f) => {
+      const key = f.component + "\u0000" + f.summary;
+      if (!seen.has(key)) {
+        seen.set(key, { ...f, nodes: [], moved: [] });
+        grouped.push(seen.get(key));
+      }
+      const g = seen.get(key);
+      g.nodes.push(f.node_id);
+      if (f.behaviour_moved) g.moved.push(f.node_id);
+    });
+    card.innerHTML = `<div class="scroll-x"><table>
+      <thead><tr><th>What changed</th><th>Where</th><th>Evidence</th><th>Behaviour moved?</th></tr></thead>
+      <tbody>${grouped.map((f) => `
+        <tr>
+          <td><strong>${esc(f.component)}</strong><br><span class="muted">${esc(f.summary)}</span></td>
+          <td>${f.nodes.length > 3
+                ? `<span class="muted">${f.nodes.length} decision points</span>`
+                : f.nodes.map((n) => `<code>${esc(n)}</code>`).join(" ")}</td>
+          <td><details class="evidence"><summary>show</summary>
+            <pre><code>${esc(JSON.stringify(f.evidence, null, 2))}</code></pre></details></td>
+          <td>${f.moved.length
+                ? pill("problem") + ` <span class="muted">${esc(f.moved.join(", "))}</span>`
+                : pill("ok")}</td>
+        </tr>`).join("")}</tbody></table></div>
+      <p class="takeaway">A change here with no behaviour change is not a fault — it is context. A change
+      here <em>with</em> a behaviour change is the most likely cause, and it is the first place to look.</p>`;
+  }
+
+  function renderQuestions() {
+    $("#question-table").querySelector("tbody").innerHTML = D.questions.map((q) => `
+      <tr>
+        <td><code>${esc(q.name)}</code></td>
+        <td class="muted">${esc(q.type === "noul" ? "yes / no" : q.type === "score" ? "rating" : "choice")}</td>
+        <td class="num">${q.k == null ? '<span class="muted">—</span>' : q.k}</td>
+        <td>${esc(typeof q.instructions === "string" ? q.instructions : JSON.stringify(q.instructions))}
+          ${q.options ? `<br><span class="muted">${esc(q.options.join(" · "))}</span>` : ""}</td>
+      </tr>`).join("");
+  }
+
+  let decisionFilter = "all";
+  function renderDecisions() {
+    const rows = D.decisions || [];
+    const hasOutcomes = rows.some((r) => r.outcome_correct != null);
+    const filters = [
+      ["all", `All (${rows.length})`],
+      ["unsure", `Unsure (${rows.filter((r) => r.unsure).length})`],
+    ];
+    if (hasOutcomes) filters.push(["wrong", `Did not match (${rows.filter((r) => r.outcome_correct === false).length})`]);
+    $("#decision-filters").innerHTML = filters.map(([k, label]) =>
+      `<button class="chip" data-filter="${k}" aria-pressed="${decisionFilter === k}">${esc(label)}</button>`).join("");
+    $("#decision-filters").querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => { decisionFilter = b.dataset.filter; renderDecisions(); }));
+
+    const shown = rows.filter((r) =>
+      decisionFilter === "all" ? true : decisionFilter === "unsure" ? r.unsure : r.outcome_correct === false);
+    const multiday = new Date(D.meta.last_seen) - new Date(D.meta.first_seen) > 24 * 3600 * 1000;
+    const body = $("#decision-table").querySelector("tbody");
+    body.innerHTML = shown.length ? shown.map((r, i) => `
+      <tr class="clickable" data-row="${i}">
+        <td class="muted">${esc(timeLabel(r.time, multiday))}</td>
+        <td><code>${esc(r.node_id)}</code></td>
+        <td>${esc(r.state)}</td>
+        <td><strong>${esc(r.action == null ? "—" : r.action)}</strong></td>
+        <td class="num">${r.certainty == null ? "—" : num(r.certainty, 2)}${r.unsure ? " ⚠" : ""}</td>
+        <td class="num">${r.latency_ms == null ? "—" : int(r.latency_ms)}</td>
+        <td>${r.outcome_correct == null ? '<span class="muted">unknown</span>'
+          : r.outcome_correct ? '<span class="pill ok"><span class="dot"></span>matched</span>'
+                              : '<span class="pill problem"><span class="dot"></span>did not match</span>'}</td>
+      </tr>`).join("") : `<tr><td colspan="7" class="empty">Nothing in this filter.</td></tr>`;
+
+    body.querySelectorAll("tr.clickable").forEach((tr) =>
+      tr.addEventListener("click", () => {
+        const next = tr.nextElementSibling;
+        if (next && next.classList.contains("detail-row")) { next.remove(); return; }
+        const r = shown[Number(tr.dataset.row)];
+        const detail = document.createElement("tr");
+        detail.className = "detail-row";
+        detail.innerHTML = `<td colspan="7">${r.answers.map((a) => `
+          <div style="margin-bottom:10px">
+            <strong>${esc(a.question)}</strong> <span class="muted">(${esc(a.type)})</span> →
+            <strong>${esc(a.branch)}</strong>
+            <div style="margin-top:6px">${a.top.map(([label, p]) => `
+              <div style="display:flex;gap:8px;align-items:center;margin:2px 0">
+                <span style="width:150px;display:inline-block">${esc(label)}</span>
+                <span class="track"><span class="bar-mini" style="width:${Math.round(96 * p)}px"></span></span>
+                <span class="muted" style="font-family:var(--mono);font-size:12px">${num(p, 2)}</span>
+              </div>`).join("")}</div>
+          </div>`).join("")}
+          <div class="muted" style="font-family:var(--mono);font-size:11.5px">trace ${esc(r.trace_id)}</div></td>`;
+        tr.after(detail);
+      }));
+
+    $("#decision-note").innerHTML =
+      `Showing the ${int(rows.length)} most recent of ${int(D.meta.n)} decisions. ` +
+      `The bars are the full probability spread the model returned, which is what makes a near-tie ` +
+      `visible — a 0.51 / 0.49 split and a 0.99 / 0.01 split take the same branch and mean very different things.`;
+  }
+
+  function renderGlossary() {
+    $("#glossary-table").querySelector("tbody").innerHTML = Object.entries(D.glossary || {})
+      .map(([k, v]) => `<tr><td style="width:190px"><strong>${esc(k)}</strong></td><td>${esc(v)}</td></tr>`)
+      .join("");
+  }
+
+  function render() {
+    renderHeader();
+    renderChecks();
+    renderActivity();
+    renderCertainty();
+    renderBehaviour();
+    renderChanged();
+    renderQuestions();
+    renderDecisions();
+    renderGlossary();
+    bindGlossary(document);
+  }
+
+  /* ---------- theme ---------- */
+  const root = document.documentElement;
+  const prefersDark = matchMedia("(prefers-color-scheme: dark)");
+  const currentTheme = () => root.getAttribute("data-theme") || (prefersDark.matches ? "dark" : "light");
+  const themeBtn = $("#theme-toggle");
+  function syncTheme() { themeBtn.textContent = currentTheme() === "dark" ? "Light mode" : "Dark mode"; }
+  themeBtn.addEventListener("click", () => {
+    root.setAttribute("data-theme", currentTheme() === "dark" ? "light" : "dark");
+    syncTheme();
+    render();
+  });
+  prefersDark.addEventListener("change", () => { if (!root.hasAttribute("data-theme")) { syncTheme(); render(); } });
+
+  /* ---------- live mode ---------- */
+  if (D.meta.live_interval_ms) {
+    setInterval(async () => {
+      try {
+        const next = await (await fetch("report.json", { cache: "no-store" })).json();
+        D = next;
+        render();
+      } catch (err) {
+        /* The server went away — keep showing the last good report. */
+      }
+    }, D.meta.live_interval_ms);
+  }
+
+  syncTheme();
+  render();
+  addEventListener("resize", hideTip);
+})();
+</script>
+</body>
+</html>
