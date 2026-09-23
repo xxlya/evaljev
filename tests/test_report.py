@@ -18,6 +18,7 @@ from evaljev import (
     declared_label_sets,
     render_html,
 )
+from evaljev.report import PAGE_KEYS
 
 T0 = datetime(2026, 9, 21, 9, 0, tzinfo=timezone.utc)
 CRITERIA = {"refund": "Money back.", "status": "Where is it.", "other": "Neither."}
@@ -370,13 +371,57 @@ def test_clean_requests_are_counted_but_not_queued():
 
 
 def test_the_page_carries_only_what_it_renders():
-    """The analysis stays in the report; the page ships the four keys it reads."""
+    """The analysis stays in the report; the page ships the keys it reads."""
     report = build_report(workflow_traces(n=24))
     page = render_html(report)
     assert "__EVALJEV_REPORT__" not in page
-    assert 'id="rows"' in page and 'id="focus"' in page
-    assert '"queue"' in page and '"workflow"' in page
-    # Panels the console does not draw are not embedded in it.
-    assert '"selective_risk"' not in page
-    assert '"reliability"' not in page
-    assert '"decisions"' not in page
+    assert 'id="runs"' in page and 'id="audit"' in page
+
+    embedded = json.loads(
+        page.split("window.EVALJEV_REPORT = ", 1)[1].split(";\n", 1)[0].replace("<\\/", "</")
+    )
+    assert set(embedded) == set(PAGE_KEYS)
+    # The analysis the page does not draw stays in the report, and in --json.
+    assert "reliability" in report and "reliability" not in embedded
+    assert "decisions" in report and "decisions" not in embedded
+
+
+def test_a_run_is_a_stretch_of_traffic_with_one_configuration():
+    """Runs are cut where something shipped, not where the arithmetic landed."""
+    rows = workflow_traces(n=48, broken_from=24)
+    runs = build_report(rows)["runs"]
+    assert [r["index"] for r in runs] == [2, 1]          # newest first
+    assert runs[1]["verdict"] == "baseline"
+    assert runs[1]["requests"] == 24 and runs[0]["requests"] == 24
+    assert runs[0]["label"] == "v2"
+
+
+def test_a_run_that_broke_something_says_what_and_what_to_do():
+    run = build_report(workflow_traces(n=48, broken_from=24))["runs"][0]
+    assert run["verdict"] == "harmful"
+    assert run["effects"] and all(e["direction"] == "worse" for e in run["effects"])
+    assert any("instructions" in c["plain"] for c in run["changes"])
+    assert "Roll this one back" in run["advice"]
+    # ...and the evidence a reader can check by eye.
+    assert run["evidence"]["changed"] > 0
+
+
+def test_a_run_that_changed_nothing_measurable_is_not_called_safe():
+    """The wording matters: nothing shown is not the same as nothing wrong."""
+    rows = workflow_traces(n=40)
+    for row in rows[20:]:
+        row.question_version = "v2"      # a version bump that changes no behaviour
+    run = build_report(rows)["runs"][0]
+    assert run["verdict"] == "no effect shown"
+    assert "Not the same as safe" in run["advice"]
+
+
+def test_the_baseline_pools_the_runs_that_held_still():
+    """Two dozen against two dozen cannot show what ninety against two dozen can."""
+    rows = workflow_traces(n=72, broken_from=48)
+    for row in rows[24:48]:
+        row.question_version = "v1b"     # a quiet run in between
+    runs = build_report(rows)["runs"]
+    newest = runs[0]
+    assert newest["compared_against"] == 48      # both earlier runs, pooled
+    assert newest["verdict"] == "harmful"

@@ -85,11 +85,14 @@ def _write(report, out: Path, json_path: str | None) -> None:
 
 
 def _summarize(report, out: Path) -> None:
-    queue = report["queue"]
     print(f"wrote {out}  ({out.stat().st_size // 1024} KB)")
-    print(f"  {queue['headline']}")
-    for row in queue["by_flag"]:
-        print(f"  {row['n']:>4}  {row['label']}")
+    print(f"  {report['runs_headline']}")
+    for run in report["runs"]:
+        print(
+            f"  run {run['index']:<3} {run['label'][:28]:<30} {run['verdict']:<20}"
+            f"{run['requests']:>4} requests"
+        )
+    print(f"  {report['queue']['headline']}")
 
 
 def cmd_report(args) -> int:

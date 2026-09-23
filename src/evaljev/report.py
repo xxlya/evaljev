@@ -25,7 +25,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
-from .attribution import action_mix
+from .attribution import action_mix, attribute
 from .drift import count_windows, drift_report
 from .lint import lint_questions
 from .metrics import (
@@ -37,7 +37,7 @@ from .metrics import (
     schema_adherence,
 )
 from .models import DecisionTrace, QuestionSpec, answer_branch, answer_distribution
-from .stats import rate_with_ci
+from .stats import compare_rates, rank_sum_test, rate_with_ci
 
 __all__ = [
     "GLOSSARY",
@@ -1383,6 +1383,328 @@ def _queue(
     }
 
 
+def _config_of(trace: DecisionTrace) -> tuple:
+    """Everything about a trace that is configuration rather than traffic."""
+    return (trace.question_version, trace.policy_version, trace.model, trace.workflow_version)
+
+
+def _split_runs(traces: Sequence[DecisionTrace]) -> list[list[DecisionTrace]]:
+    """Cut the stream where the workflow's configuration changed.
+
+    A run is a stretch of traffic the deployment answered with one setup. That is
+    the unit a person actually ships and rolls back, and it beats a fixed-size
+    window for the same reason a release beats a calendar week: the boundary is
+    where something happened, not where the arithmetic landed.
+
+    Nodes interleave, so the boundary is any node moving to a version it had not
+    been on — a node appearing for the first time is not a change.
+    """
+    runs: list[list[DecisionTrace]] = []
+    current: dict[str, tuple] = {}
+    for trace in sorted(traces, key=lambda t: t.timestamp):
+        config = _config_of(trace)
+        known = current.get(trace.node_id)
+        if known is not None and known != config and runs:
+            runs.append([])
+        current[trace.node_id] = config
+        if not runs:
+            runs.append([])
+        runs[-1].append(trace)
+    return [r for r in runs if r]
+
+
+def _unsure_counts(rows: Sequence[DecisionTrace], unsure_below: float) -> tuple[int, int]:
+    values = [c for c in (_decision_certainty(t) for t in rows) if c is not None]
+    return sum(1 for c in values if c < unsure_below), len(values)
+
+
+def _run_effects(previous, current, unsure_below: float, alpha: float = 0.05) -> list[dict]:
+    """What measurably moved between two runs, per decision point.
+
+    Only tested movements are returned. A run that changed nothing measurable gets
+    an empty list, which the verdict reads as "nothing was shown" — never as "safe".
+    """
+    effects: list[dict] = []
+    nodes = sorted({t.node_id for t in current} & {t.node_id for t in previous})
+    for node in nodes:
+        before = [t for t in previous if t.node_id == node]
+        after = [t for t in current if t.node_id == node]
+
+        b_unsure, b_n = _unsure_counts(before, unsure_below)
+        a_unsure, a_n = _unsure_counts(after, unsure_below)
+        if b_n and a_n:
+            test = compare_rates(b_unsure, b_n, a_unsure, a_n, alpha=alpha)
+            if test["changed"]:
+                worse = test["current"]["rate"] > test["reference"]["rate"]
+                effects.append(
+                    {
+                        "node_id": node,
+                        "metric": "second looks",
+                        "direction": "worse" if worse else "better",
+                        "p_value": test["p_value"],
+                        "plain": f"answers needing a second look at {_friendly(node)}: "
+                        f"{_pct(test['reference']['rate'])} → {_pct(test['current']['rate'])}",
+                    }
+                )
+
+        certainty = rank_sum_test(
+            [c for c in (_decision_certainty(t) for t in before) if c is not None],
+            [c for c in (_decision_certainty(t) for t in after) if c is not None],
+            alpha=alpha,
+        )
+        moved = (
+            certainty["changed"]
+            and not certainty["underpowered"]
+            and (certainty["median_shift"] or 0) >= 0.05
+        )
+        if moved:
+            effects.append(
+                {
+                    "node_id": node,
+                    "metric": "certainty",
+                    "direction": "worse" if certainty["median_b"] < certainty["median_a"] else "better",
+                    "p_value": certainty["p_value"],
+                    "plain": f"typical certainty at {_friendly(node)}: "
+                    f"{certainty['median_a']:.2f} → {certainty['median_b']:.2f}",
+                }
+            )
+
+        b_label = [t for t in before if t.outcome_correct is not None]
+        a_label = [t for t in after if t.outcome_correct is not None]
+        if b_label and a_label:
+            test = compare_rates(
+                sum(bool(t.outcome_correct) for t in b_label),
+                len(b_label),
+                sum(bool(t.outcome_correct) for t in a_label),
+                len(a_label),
+                alpha=alpha,
+            )
+            if test["changed"]:
+                effects.append(
+                    {
+                        "node_id": node,
+                        "metric": "accuracy",
+                        "direction": "worse"
+                        if test["current"]["rate"] < test["reference"]["rate"]
+                        else "better",
+                        "p_value": test["p_value"],
+                        "plain": f"accuracy on reviewed decisions at {_friendly(node)}: "
+                        f"{_pct(test['reference']['rate'])} → {_pct(test['current']['rate'])}",
+                    }
+                )
+    return effects
+
+
+def _same_input_pairs(previous, current, unsure_below: float, nodes, limit: int = 4) -> dict:
+    """Inputs that arrived in both runs — the closest thing traffic gives to a replay.
+
+    Restricted to the decision points the run actually changed: counting an input
+    twice because an untouched downstream node also saw it inflates the denominator
+    and makes the evidence look weaker than it is.
+    """
+    pairs = []
+    for node in nodes:
+        before = {
+            json.dumps(t.state, sort_keys=True, default=str): t
+            for t in previous
+            if t.node_id == node
+        }
+        for trace in (t for t in current if t.node_id == node):
+            key = json.dumps(trace.state, sort_keys=True, default=str)
+            if key not in before:
+                continue
+            was = before[key]
+            pairs.append(
+                {
+                    "node_id": node,
+                    "input": _split_state(trace.state)[0],
+                    "before": _step(was, unsure_below),
+                    "after": _step(trace, unsure_below),
+                    "changed": was.action != trace.action,
+                }
+            )
+    pairs.sort(key=lambda p: not p["changed"])
+    return {
+        "pairs": pairs[:limit],
+        "total": len(pairs),
+        "changed": sum(1 for p in pairs if p["changed"]),
+    }
+
+
+def _run_changes(previous, current) -> list[dict]:
+    """What changed between two runs, decision point by decision point.
+
+    Per node, because the version fields only mean anything within one: diffing the
+    whole window compares `category-v3` against `urgency-v1` and prints a change
+    that never happened.
+    """
+    changes: list[dict] = []
+    for node in sorted({t.node_id for t in current} & {t.node_id for t in previous}):
+        before = [t for t in previous if t.node_id == node]
+        after = [t for t in current if t.node_id == node]
+        for finding in attribute(before, after)["findings"]:
+            if finding["component"] == "behaviour":
+                continue
+            changes.append(
+                {
+                    "node_id": node,
+                    "component": finding["component"],
+                    "plain": _plain_finding(finding),
+                }
+            )
+    return changes
+
+
+def _audit_runs(traces, groups, unsure_below: float, limit: int = 12) -> list[dict]:
+    """One audit per deployment: what changed, what moved, and whether to keep it.
+
+    Each run is measured against **the last stretch that held still** — every run
+    since the previous one that moved something, pooled. Comparing only against the
+    run immediately before throws away the baseline: two dozen requests against two
+    dozen cannot establish a rate change that ninety against two dozen can, and the
+    earlier runs are part of the same regime as long as nothing moved in them.
+    """
+    runs = _split_runs(traces)
+    request_of = {t.trace_id: rid for rid, rows in groups.items() for t in rows}
+    out: list[dict] = []
+    baseline_from = 0  # index of the first run in the current stable stretch
+
+    for i, rows in enumerate(runs):
+        requests = {request_of.get(t.trace_id) for t in rows}
+        requests.discard(None)
+        entry = {
+            "index": i + 1,
+            "start": rows[0].timestamp.isoformat(),
+            "end": rows[-1].timestamp.isoformat(),
+            "decisions": len(rows),
+            "requests": len(requests),
+            "request_ids": sorted(r for r in requests if r),
+            "changes": [],
+            "effects": [],
+            "evidence": {"pairs": [], "total": 0, "changed": 0},
+            "compared_against": 0,
+        }
+        if i == 0:
+            entry["label"] = "the original"
+            entry["verdict"] = "baseline"
+            entry["verdict_detail"] = "The first setup recorded. Everything after is measured against it."
+            entry["advice"] = ""
+            out.append(entry)
+            continue
+
+        baseline = [t for run in runs[baseline_from:i] for t in run]
+        entry["compared_against"] = len(
+            {request_of.get(t.trace_id) for t in baseline} - {None}
+        )
+        entry["changes"] = _run_changes(runs[i - 1], rows)
+        changed_nodes = sorted({c["node_id"] for c in entry["changes"]})
+        entry["label"] = ", ".join(
+            sorted(
+                {
+                    t.question_version
+                    for t in rows
+                    if t.question_version and t.node_id in changed_nodes
+                }
+            )
+        ) or f"run {i + 1}"
+        entry["effects"] = _run_effects(baseline, rows, unsure_below)
+        entry["evidence"] = _same_input_pairs(
+            baseline, rows, unsure_below, changed_nodes or sorted({t.node_id for t in rows})
+        )
+
+        worse = [e for e in entry["effects"] if e["direction"] == "worse"]
+        better = [e for e in entry["effects"] if e["direction"] == "better"]
+        if worse:
+            entry["verdict"] = "harmful"
+            entry["verdict_detail"] = "; ".join(e["plain"] for e in worse)
+            # Prefer the edit over the label that records it: "the option descriptions
+            # were reworded" is something to go and fix, "the version is now v4" is not.
+            cause = next(
+                (c for c in entry["changes"] if c["component"] == "schema"),
+                entry["changes"][0] if entry["changes"] else None,
+            )
+            entry["advice"] = (
+                f"Roll this one back, or fix what it changed: {cause['plain']}."
+                if cause
+                else "Nothing in your configuration changed, so this points outside it — "
+                "check whether the model itself moved."
+            )
+        elif better:
+            entry["verdict"] = "improvement"
+            entry["verdict_detail"] = "; ".join(e["plain"] for e in better)
+            entry["advice"] = "Keep it."
+        elif entry["requests"] < 8:
+            entry["verdict"] = "not enough evidence"
+            entry["verdict_detail"] = (
+                f"{entry['requests']} requests is too few to compare against anything."
+            )
+            entry["advice"] = "Leave it running and come back."
+        else:
+            entry["verdict"] = "no effect shown"
+            entry["verdict_detail"] = (
+                f"Nothing moved that {entry['requests']} requests against "
+                f"{entry['compared_against']} could establish."
+            )
+            entry["advice"] = (
+                "Not the same as safe: at this volume a change has to be large to show up. "
+                "Worth rechecking once more traffic has gone through it."
+            )
+
+        # A run that moved something ends the stable stretch: the next run is
+        # measured against this new normal, not against the old one.
+        if entry["verdict"] in ("harmful", "improvement"):
+            baseline_from = i
+        out.append(entry)
+
+    return list(reversed(out[-limit:]))
+
+
+def _attach_run_counts(runs: Sequence[dict], queue: Mapping[str, Any]) -> None:
+    """Fold the per-request triage into the run it belongs to."""
+    status_of = {row["request_id"]: row["status"] for row in queue["rows"]}
+    for run in runs:
+        counts = {"acted_alone": 0, "with_person": 0, "clear": 0}
+        for request_id in run["request_ids"]:
+            counts[status_of.get(request_id, "clear")] += 1
+        run["queue_counts"] = counts
+
+
+def _runs_headline(runs: Sequence[Mapping[str, Any]]) -> str:
+    """The audit in one sentence: how many runs, and what the newest one did."""
+    if not runs:
+        return "No runs recorded yet."
+    total = len(runs)
+    newest = runs[0]
+    if total == 1:
+        return (
+            f"One run recorded, {newest['requests']} requests on the setup you started with. "
+            "Change something and the next run is measured against it."
+        )
+    plural = "runs" if total != 1 else "run"
+    if newest["verdict"] == "harmful":
+        worse = [e for e in newest["effects"] if e["direction"] == "worse"]
+        rest = (
+            f", and {len(worse) - 1} other measure{'s' if len(worse) > 2 else ''} moved with it"
+            if len(worse) > 1
+            else ""
+        )
+        return (
+            f"{total} {plural} recorded. The newest one broke something: "
+            f"{worse[0]['plain']}{rest}."
+        )
+    if newest["verdict"] == "improvement":
+        return f"{total} {plural} recorded. The newest one helped: {newest['verdict_detail']}."
+    if newest["verdict"] == "not enough evidence":
+        return (
+            f"{total} {plural} recorded. The newest one is too young to judge — "
+            f"{newest['requests']} requests so far."
+        )
+    return (
+        f"{total} {plural} recorded. Nothing the newest one changed moved anything "
+        f"{newest['requests']} requests against {newest['compared_against']} could establish."
+    )
+
+
 def _queue_headline(queue: Mapping[str, Any], drift) -> str:
     """The state of the window as one sentence — a rate, not a bare count.
 
@@ -1658,6 +1980,8 @@ def build_report(
     comparisons = _same_input_comparisons(rows, drift, unsure_below)
     queue = _queue(groups, rows, checks, drift, unsure_below, human_actions, grouped=grouped)
     queue["headline"] = _queue_headline(queue, drift)
+    runs = _audit_runs(rows, groups, unsure_below)
+    _attach_run_counts(runs, queue)
     # Every diff the traces support, not only the ones that moved behaviour. A
     # component that changed while behaviour held still is not a fault, but it is
     # the first thing anyone asks about when a number looks odd next week.
@@ -1720,6 +2044,8 @@ def build_report(
             for q in _latest_questions(rows)
         ],
         "attribution": findings,
+        "runs": runs,
+        "runs_headline": _runs_headline(runs),
         "story": _story(checks, drift, comparisons, findings, len(groups)),
         "queue": queue,
         "workflow": _workflow_path(rows, groups, drift, unsure_below, labels),
@@ -1733,7 +2059,7 @@ def build_report(
 #: What the page reads. Everything else `build_report` computes stays available
 #: through `--json`, which is the interface for anyone who wants the rest — there
 #: is no reason to ship 200 KB of unread JSON inside an HTML file.
-PAGE_KEYS = ("meta", "story", "queue", "workflow")
+PAGE_KEYS = ("meta", "runs", "runs_headline", "queue", "workflow")
 
 
 def render_html(report: Mapping[str, Any]) -> str:

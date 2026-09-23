@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Decision console — EvalJev</title>
-<meta name="description" content="Which requests in a Jev workflow are waiting on a person, and where along the way each one was flagged.">
+<title>Run audit — EvalJev</title>
+<meta name="description" content="Every change shipped to a Jev workflow, what it did to real requests, and whether to keep it.">
 <style>
   :root {
     color-scheme: light;
@@ -89,7 +89,6 @@
 
   ::selection { background: color-mix(in srgb, var(--series-1) 25%, transparent); }
 
-  /* ---------- chrome ---------- */
   .topbar { border-bottom: 1px solid var(--border); }
   .topbar .wrap { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
   .mark { font-family: var(--mono); font-size: 11.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-muted); }
@@ -105,126 +104,93 @@
   code { font-family: var(--mono); font-size: .88em; }
   @media (max-width: 620px) { #links a:not(:first-child) { display: none; } }
 
-  /* ---------- masthead ---------- */
   .masthead { padding: 54px 0 0; }
   .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
              color: var(--text-muted); margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
   .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--good); display: inline-block; }
   h1 { font-family: var(--serif); font-weight: 400; font-size: clamp(34px, 5.2vw, 54px);
        line-height: 1.04; letter-spacing: -.022em; margin: 0 0 18px; }
-  .lede { font-size: 20px; line-height: 1.5; max-width: 34em; margin: 0 0 6px; color: var(--text-primary); }
+  .lede { font-size: 20px; line-height: 1.5; max-width: 36em; margin: 0; }
   .lede em { font-style: normal; color: var(--critical); }
-  .note { font-size: 13.5px; color: var(--text-muted); max-width: 46em; margin: 14px 0 0; line-height: 1.6; }
+  .note { font-size: 13.5px; color: var(--text-muted); max-width: 46em; margin: 16px 0 0; line-height: 1.6; }
   .note b { color: var(--text-secondary); font-weight: 600; }
 
-  /* ---------- ribbon ---------- */
-  .ribbon-wrap { margin: 34px 0 0; }
-  .ribbon { display: flex; gap: 3px; align-items: flex-end; height: 40px; }
-  .ribbon .tick { flex: 1 1 0; min-width: 2px; max-width: 9px; border-radius: 2px;
-                  background: var(--good); opacity: .34; height: 34%;
-                  transition: height .12s ease, opacity .12s ease; cursor: default; }
-  .ribbon .tick.with_person { background: var(--warning); opacity: .7; height: 62%; }
-  .ribbon .tick.acted_alone { background: var(--critical); opacity: .85; height: 100%; cursor: pointer; }
-  .ribbon .tick:hover, .ribbon .tick.on { opacity: 1; }
-  .ribbon .tick.on { outline: 1px solid var(--text-primary); outline-offset: 1px; }
-  .axis { display: flex; justify-content: space-between; font-family: var(--mono);
-          font-size: 11px; color: var(--text-muted); margin-top: 8px; }
-
-  /* ---------- filters ---------- */
-  .filters { display: flex; gap: 26px; flex-wrap: wrap; margin: 26px 0 0;
-             border-top: 1px solid var(--border); padding-top: 18px; }
-  .filters button {
-    font: inherit; background: none; border: none; padding: 0; cursor: pointer; text-align: left;
-    color: var(--text-secondary);
-  }
-  .filters .n { font-size: 26px; font-weight: 600; letter-spacing: -.02em; color: var(--text-primary);
-                display: block; line-height: 1.1; }
-  .filters .l { font-size: 13px; display: flex; align-items: center; gap: 7px; margin-top: 3px; }
-  .filters .swatch { width: 8px; height: 8px; border-radius: 2px; background: var(--good); }
-  .filters button[data-k="acted_alone"] .swatch { background: var(--critical); }
-  .filters button[data-k="with_person"] .swatch { background: var(--warning); }
-  .filters button[aria-pressed="true"] .l { color: var(--text-primary); font-weight: 600; }
-  .filters button[aria-pressed="true"] { box-shadow: inset 0 -2px 0 var(--text-primary); }
-  .filters button:hover .l { color: var(--text-primary); }
-
-  /* ---------- workflow strip ---------- */
-  .inferred { font-size: 12.5px; color: var(--text-muted); margin: 14px 0 0; }
-  .inferred code { font-size: 12px; }
-  .flow-strip { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 0 14px; margin: 30px 0 0;
-                padding-top: 18px; border-top: 1px solid var(--border); }
-  .flow-strip .stage { padding: 2px 0; }
-  .flow-strip .stage .name { font-size: 15px; }
-  .flow-strip .stage { max-width: 27em; }
-  .flow-strip .stage .sub { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; line-height: 1.5; }
-  .flow-strip .stage.changed .name { color: var(--critical); font-weight: 600; }
-  .flow-strip .stage.changed .sub { color: var(--critical); }
-  .flow-strip .link { color: var(--text-muted); font-size: 15px; line-height: 1; padding: 4px 2px 0; }
-  @media (max-width: 720px) { .flow-strip .link { display: none; } .flow-strip { gap: 10px 0; flex-direction: column; align-items: flex-start; } }
-
-  /* ---------- split ---------- */
-  .split { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 42px; margin: 44px 0 0;
+  .split { display: grid; grid-template-columns: minmax(250px, 320px) 1fr; gap: 46px; margin: 44px 0 0;
            align-items: start; border-top: 1px solid var(--border); padding-top: 26px; }
   @media (max-width: 920px) { .split { grid-template-columns: 1fr; gap: 26px; } }
+  h2 { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+       color: var(--text-muted); font-weight: 500; margin: 0 0 12px; }
 
-  .list h2, .focus h2 { font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
-                        text-transform: uppercase; color: var(--text-muted); font-weight: 500; margin: 0 0 6px; }
-  .hint { font-size: 12.5px; color: var(--text-muted); margin: 0 0 10px; }
-  .rows { max-height: 70vh; overflow-y: auto; margin: 0 -10px; }
-  .rows button {
+  /* ---------- the runs ---------- */
+  .runs { margin: 0 -10px; }
+  .runs button {
     display: block; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
     background: none; border: none; border-top: 1px solid var(--border);
-    padding: 13px 10px 13px 12px; position: relative; transition: background .1s;
+    padding: 14px 10px 14px 12px; position: relative; transition: background .1s;
   }
-  .rows button:last-child { border-bottom: 1px solid var(--border); }
-  .rows button:hover { background: var(--surface-1); }
-  .rows button[aria-pressed="true"] { background: var(--surface-1); }
-  .rows button[aria-pressed="true"]:before {
+  .runs button:last-child { border-bottom: 1px solid var(--border); }
+  .runs button:hover { background: var(--surface-1); }
+  .runs button[aria-pressed="true"] { background: var(--surface-1); }
+  .runs button[aria-pressed="true"]:before {
     content: ""; position: absolute; left: 0; top: -1px; bottom: 0; width: 2px; background: var(--text-primary);
   }
-  .rows .meta { font-family: var(--mono); font-size: 11px; color: var(--text-muted);
-                display: flex; align-items: center; gap: 7px; }
-  .rows .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
-  .rows .dot.acted_alone { background: var(--critical); }
-  .rows .dot.with_person { background: var(--warning); }
-  .rows .meta { display: flex; align-items: center; gap: 7px; }
-  .rows .text, .rows .why { display: block; }
-  .rows .text { font-size: 14px; margin: 5px 0 4px; line-height: 1.45; }
-  .rows .why { font-size: 12.5px; color: var(--text-secondary); }
+  .runs .top { display: flex; align-items: baseline; gap: 8px; }
+  .runs .n { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+  .runs .label { font-size: 15px; font-weight: 600; }
+  .runs .verdict { font-size: 12.5px; margin-top: 5px; display: flex; align-items: center; gap: 7px; }
+  .runs .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
+  .runs .dot.harmful { background: var(--critical); }
+  .runs .dot.improvement { background: var(--good); }
+  .runs .dot.baseline, .runs .dot.no { background: var(--text-muted); }
+  .runs .dot.thin { background: var(--warning); }
+  .runs .when { font-family: var(--mono); font-size: 11px; color: var(--text-muted); margin-top: 5px; }
 
-  /* ---------- focus ---------- */
-  .focus { position: sticky; top: 24px; animation: rise .18s ease both; }
+  /* ---------- the audit ---------- */
+  .audit { animation: rise .18s ease both; }
   @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-  .focus .quote { font-family: var(--serif); font-size: 23px; line-height: 1.35; margin: 0 0 10px;
-                  letter-spacing: -.01em; }
-  .focus .sub { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); margin: 0 0 26px; }
-  .reason { display: grid; grid-template-columns: max-content 1fr; gap: 8px 20px; margin: 0 0 30px; }
-  .reason dt { font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
-               color: var(--text-muted); padding-top: 4px; white-space: nowrap; }
-  .reason dd { margin: 0; font-size: 14.5px; line-height: 1.55; max-width: 46em; }
-  .reason .flagword { color: var(--critical); }
-  @media (max-width: 620px) { .reason { grid-template-columns: 1fr; gap: 2px; } .reason dd { margin-bottom: 12px; } }
+  .audit .head { font-family: var(--serif); font-size: 28px; letter-spacing: -.015em; margin: 0 0 4px; }
+  .audit .scope { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); margin: 0 0 26px; }
+  .block { border-top: 1px solid var(--border); padding: 18px 0; }
+  .block:last-child { border-bottom: 1px solid var(--border); }
+  .block ul { margin: 0; padding-left: 18px; }
+  .block li { font-size: 14.5px; line-height: 1.6; margin-bottom: 4px; }
+  .block li .where { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); }
+  .block p { margin: 0; font-size: 14.5px; line-height: 1.6; max-width: 46em; }
+  .verdict-line { font-size: 17px; margin: 0 0 6px; }
+  .verdict-line b { font-weight: 600; }
+  .verdict-line.harmful b { color: var(--critical); }
+  .verdict-line.improvement b { color: var(--good); }
+  .effect { font-size: 14.5px; line-height: 1.6; }
+  .effect .p { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); }
 
-  .path { margin: 0; padding: 0; list-style: none; }
-  .path li { position: relative; padding: 0 0 26px 28px; }
+  .pair { border-top: 1px solid var(--border); padding: 14px 0; }
+  .pair:first-of-type { border-top: none; padding-top: 4px; }
+  .pair .text { font-size: 14.5px; margin: 0 0 8px; }
+  .pair .sides { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 13.5px; }
+  .pair .side { color: var(--text-secondary); }
+  .pair .side b { color: var(--text-primary); }
+  .pair .arrow { color: var(--text-muted); }
+
+  .flagged, .block ul.flagged { margin: 0; padding-left: 0; list-style: none; }
+  .flagged > li { border-top: 1px solid var(--border); }
+  .flagged > li:first-child { border-top: none; }
+  .flagged button {
+    display: block; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
+    background: none; border: none; padding: 11px 0;
+  }
+  .flagged button:hover { color: var(--text-secondary); }
+  .flagged .why { font-size: 12.5px; color: var(--text-secondary); margin-top: 3px; }
+  .path { margin: 4px 0 16px; padding: 0; list-style: none; }
+  .path li { position: relative; padding: 0 0 16px 26px; }
   .path li:before { content: ""; position: absolute; left: 4px; top: 5px; width: 9px; height: 9px;
                     border-radius: 50%; background: var(--surface-0); border: 2px solid var(--good); }
-  .path li.flagged:before { border-color: var(--critical); background: var(--critical); }
+  .path li.flag:before { border-color: var(--critical); background: var(--critical); }
   .path li:after { content: ""; position: absolute; left: 8px; top: 18px; bottom: 0; width: 1px; background: var(--border); }
   .path li:last-child { padding-bottom: 0; }
   .path li:last-child:after { display: none; }
-  .path .stage { font-size: 13px; color: var(--text-muted); }
-  .path .took { font-size: 16px; margin-top: 3px; }
-  .path .took b { font-weight: 600; }
-  .path .bars { margin-top: 10px; display: grid; gap: 4px; max-width: 360px; }
-  .path .bar-row { display: grid; grid-template-columns: 1fr 96px 38px; gap: 10px; align-items: center; font-size: 13px; }
-  .path .bar-row .name { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .path .bar-row .v { font-family: var(--mono); font-size: 11.5px; text-align: right; color: var(--text-muted); }
-  .rail { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; line-height: 0; font-size: 0; }
-  .fill { display: block; height: 6px; border-radius: 3px; background: var(--text-secondary); }
-  .fill.lead { background: var(--series-1); }
-  .fill.low { background: var(--critical); }
-  .path .flag { margin-top: 10px; font-size: 13.5px; color: var(--critical); max-width: 46em; line-height: 1.5; }
-  .path .flag.medium { color: var(--warning); }
+  .path .stage { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); }
+  .path .took { font-size: 14.5px; margin-top: 2px; }
+  .path .note2 { font-size: 13px; color: var(--critical); margin-top: 5px; }
 
   .empty { color: var(--text-muted); font-size: 14px; }
   footer { border-top: 1px solid var(--border); margin-top: 56px; padding: 28px 0 64px;
@@ -233,13 +199,9 @@
   footer .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
   pre { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
         overflow-x: auto; font-size: 12.5px; line-height: 1.65; margin: 10px 0 0; font-family: var(--mono); }
-  #tip { position: fixed; pointer-events: none; opacity: 0; transition: opacity .1s;
-         background: var(--text-primary); color: var(--surface-0); border-radius: 6px;
-         padding: 6px 9px; font-size: 12px; font-family: var(--mono); z-index: 60; }
 </style>
 </head>
 <body>
-<div id="tip"></div>
 
 <div class="topbar">
   <div class="wrap">
@@ -252,39 +214,28 @@
 
 <header class="masthead">
   <div class="wrap">
-    <p class="eyebrow"><span class="pulse" id="pulse"></span><span id="eyebrow">Decision console</span></p>
+    <p class="eyebrow"><span class="pulse" id="pulse"></span><span id="eyebrow">Run audit</span></p>
     <h1 id="title">—</h1>
     <p class="lede" id="headline"></p>
     <p class="note" id="note" hidden></p>
-
-    <div class="ribbon-wrap">
-      <div class="ribbon" id="ribbon"></div>
-      <div class="axis"><span id="axis-from"></span><span id="axis-to"></span></div>
-    </div>
-
-    <nav class="filters" id="filters"></nav>
-    <p class="inferred" id="inferred"></p>
-    <div class="flow-strip" id="program"></div>
-    <p class="inferred" id="second-look"></p>
   </div>
 </header>
 
 <main class="wrap">
   <div class="split">
-    <section class="list">
-      <h2 id="list-head">Queue</h2>
-      <p class="hint" id="list-hint">Pick one to see where it went.</p>
-      <div class="rows" id="rows"></div>
+    <section>
+      <h2>Runs, newest first</h2>
+      <div class="runs" id="runs"></div>
     </section>
-    <section class="focus" id="focus"></section>
+    <section class="audit" id="audit"></section>
   </div>
 </main>
 
 <footer>
   <div class="wrap cols">
     <div>
-      <p><strong>Watch your own workflow.</strong> Record the decisions you already make,
-         then point the console at the file it writes.</p>
+      <p><strong>Audit your own changes.</strong> Record the decisions your workflow already
+         makes, keep shipping, and every configuration change becomes a run with a verdict.</p>
       <p class="muted" id="provenance"></p>
     </div>
     <div>
@@ -293,10 +244,10 @@
 monitor.run(client, workflow_id="my-app",
             node_id="classify", state=state,
             questions=questions, policy=my_policy,
+            question_version="category-v4",
             metadata={"request_id": request_id})
 
-$ evaljev console traces.jsonl --open
-$ evaljev serve traces.jsonl</code></pre>
+$ evaljev console traces.jsonl --open</code></pre>
     </div>
   </div>
 </footer>
@@ -319,7 +270,6 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const num = (x, n = 2) => (x == null || Number.isNaN(x) ? "\u2014" : Number(x).toFixed(n));
   const int = (x) => (x == null ? "\u2014" : Number(x).toLocaleString());
-  // Identifiers come out of somebody's code in snake_case; nobody reads a page in it.
   const words = (s) => String(s == null ? "" : s).replace(/[_-]+/g, " ");
   const clock = (iso, withDate) => {
     const d = new Date(iso);
@@ -327,194 +277,152 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
     const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     return withDate ? d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + t : t;
   };
-
-  const tip = $("#tip");
-  const showTip = (html, e) => {
-    tip.innerHTML = html; tip.style.opacity = "1";
-    const r = tip.getBoundingClientRect();
-    tip.style.left = Math.min(e.clientX + 12, innerWidth - r.width - 10) + "px";
-    tip.style.top = Math.max(e.clientY - r.height - 12, 8) + "px";
+  const VERDICT = {
+    harmful: ["harmful", "harmful"],
+    improvement: ["improvement", "improvement"],
+    "no effect shown": ["no", "no effect shown"],
+    "not enough evidence": ["thin", "too early to tell"],
+    baseline: ["baseline", "the starting point"],
   };
-  const hideTip = () => (tip.style.opacity = "0");
 
-  const FILTERS = [
-    ["acted_alone", "answered alone, but shouldn\u2019t have"],
-    ["with_person", "flagged, already with a person"],
-    ["clear", "came through clear"],
-  ];
-  const HEADINGS = {
-    acted_alone: "Answered alone, but shouldn\u2019t have",
-    with_person: "Flagged, already with a person",
-    clear: "Came through clear",
-  };
-  let filter = "acted_alone";
   let selected = 0;
-
-  function rows() { return (D.queue.rows || []).filter((r) => r.status === filter); }
+  let openRequest = null;
 
   function renderMasthead() {
-    const m = D.meta, q = D.queue;
-    document.title = m.title + " \u2014 EvalJev console";
+    const m = D.meta, runs = D.runs || [];
+    document.title = m.title + " \u2014 run audit";
     $("#title").textContent = m.title;
-    $("#eyebrow").textContent = m.live_interval_ms
-      ? `Decision console \u00b7 live, every ${Math.round(m.live_interval_ms / 1000)}s`
-      : `Decision console \u00b7 ${clock(m.first_seen, true)} to ${clock(m.last_seen, true)}`;
+    $("#eyebrow").textContent =
+      `Run audit \u00b7 ${clock(m.first_seen, true)} to ${clock(m.last_seen, true)}`;
+    const newest = runs[0];
     $("#pulse").style.background =
-      q.counts.acted_alone ? "var(--critical)" : q.counts.with_person ? "var(--warning)" : "var(--good)";
-    // Emphasise the one number the sentence is actually about.
-    $("#headline").innerHTML = esc(q.headline)
-      .replace(/(\d+) of those it should not have/, "<em>$1 of those it should not have</em>");
+      newest && newest.verdict === "harmful" ? "var(--critical)"
+        : newest && newest.verdict === "not enough evidence" ? "var(--warning)" : "var(--good)";
+    $("#headline").innerHTML = esc(D.runs_headline || "").replace(
+      /broke something/, "<em>broke something</em>");
     const note = $("#note");
     note.hidden = !m.note;
     if (m.note) note.innerHTML = m.note;
     $("#links").innerHTML = (m.links || [])
       .map((l) => `<a class="ghost" href="${esc(l.href)}">${esc(l.label)}</a>`).join("");
-    const q2 = D.queue;
-    $("#inferred").innerHTML = q2.human_actions.length
-      ? `Counting ${q2.human_actions.map((a) => `<strong>${esc(words(a))}</strong>`).join(" and ")} ` +
-        `as "a person is involved"${q2.human_actions_inferred
-          ? ' \u2014 matched by name, pass <code>--human-actions</code> to set it yourself' : ""}.`
-      : `No branch in this workflow looked like a route to a person, so every flagged request ` +
-        `is listed. Pass <code>--human-actions</code> to name the ones that are.`;
-    $("#second-look").textContent =
-      `"Needs a second look" means the model put less than ${num(q2.review_line, 2)} of the ` +
-      `probability on the answer it gave \u2014 your review line.`;
     $("#provenance").textContent =
-      `${int(m.n)} decisions recorded ${clock(m.first_seen, true)} to ${clock(m.last_seen, true)}, ` +
-      `computed by EvalJev from the traces. Nothing on this page was written by a model.`;
+      `${int(m.n)} decisions across ${runs.length} run${runs.length === 1 ? "" : "s"}, ` +
+      `computed by EvalJev from the recorded traces. Nothing here was written by a model.`;
   }
 
-  /* Every request in the window, in order — the shape of the stream at a glance. */
-  function renderRibbon() {
-    const line = D.queue.timeline || [];
-    if (!line.length) return;
-    const wrap = $("#ribbon");
-    wrap.innerHTML = line.map((r, i) =>
-      `<div class="tick ${esc(r.status)}" data-i="${i}" tabindex="-1"></div>`).join("");
-    const label = {
-      acted_alone: "answered alone, but shouldn\u2019t have",
-      with_person: "flagged, a person has it",
-      clear: "clear",
-    };
-    wrap.querySelectorAll(".tick").forEach((el) => {
-      const r = line[Number(el.dataset.i)];
-      el.addEventListener("pointerenter", (e) =>
-        showTip(`${esc(clock(r.time, true))} \u00b7 ${esc(label[r.status])}`, e));
-      el.addEventListener("pointermove", (e) =>
-        showTip(`${esc(clock(r.time, true))} \u00b7 ${esc(label[r.status])}`, e));
-      el.addEventListener("pointerleave", hideTip);
-      el.addEventListener("click", () => {
-        if (r.status === "clear") return;
-        filter = r.status;
-        const list = rows();
-        const i = list.findIndex((x) => x.request_id === r.request_id);
-        selected = i < 0 ? 0 : i;
-        render();
-      });
-    });
-    $("#axis-from").textContent = clock(line[0].time, true);
-    $("#axis-to").textContent = clock(line[line.length - 1].time, true);
-  }
-
-  function renderFilters() {
-    const q = D.queue;
-    $("#filters").innerHTML = FILTERS.map(([key, label]) => `
-      <button data-k="${key}" aria-pressed="${filter === key}">
-        <span class="n">${int(q.counts[key])}</span>
-        <span class="l"><span class="swatch"></span>${esc(label)}</span>
-      </button>`).join("");
-    $("#filters").querySelectorAll("button").forEach((b) =>
-      b.addEventListener("click", () => { filter = b.dataset.k; selected = 0; render(); }));
-  }
-
-  function renderFlow() {
-    $("#program").innerHTML = D.workflow.map((n, i) => `
-      ${i ? '<div class="link">\u2192</div>' : ""}
-      <div class="stage ${n.drifted ? "changed" : ""}">
-        <div class="name" title="${esc(n.node_id)}">${esc(words(n.node_id))}</div>
-        <div class="sub">${esc(n.kind)}<br>${esc(n.summary)}</div>
-      </div>`).join("");
-  }
-
-  function renderRows() {
-    const list = rows();
-    const multiday = new Date(D.meta.last_seen) - new Date(D.meta.first_seen) > 864e5;
-    $("#list-head").textContent = HEADINGS[filter];
-
-    $("#list-hint").hidden = filter === "clear" || !D.queue.counts[filter];
-    if (filter === "clear") {
-      $("#rows").innerHTML = `<p class="empty" style="padding:12px 10px">` +
-        `${int(D.queue.counts.clear)} requests came through with nothing flagged, so they are not ` +
-        `listed. A console should only show you what it wants you to look at.</p>`;
-      $("#focus").innerHTML = `<h2>Nothing to review</h2><p class="empty">Pick one of the other two piles.</p>`;
-      return;
-    }
-    if (!list.length) {
-      $("#rows").innerHTML = `<p class="empty" style="padding:12px 10px">Nothing in this pile.</p>`;
-      $("#focus").innerHTML = `<h2>Nothing to review</h2><p class="empty">This pile is empty.</p>`;
-      return;
-    }
-    $("#rows").innerHTML = list.map((r, i) => `
+  function renderRuns() {
+    const runs = D.runs || [];
+    $("#runs").innerHTML = runs.map((r, i) => {
+      const [cls, label] = VERDICT[r.verdict] || ["no", r.verdict];
+      return `
       <button data-i="${i}" aria-pressed="${i === selected}">
-        <span class="meta"><span class="dot ${esc(r.status)}"></span>${esc(clock(r.time, multiday))}
-          \u00b7 ${esc(words(r.flagged_at))}</span>
-        <span class="text">${esc(r.input)}</span>
-        <span class="why">${esc(words(r.reason))}</span>
-      </button>`).join("");
-    $("#rows").querySelectorAll("button").forEach((b) =>
-      b.addEventListener("click", () => { selected = Number(b.dataset.i); render(); }));
+        <span class="top"><span class="n">RUN ${r.index}</span>
+          <span class="label">${esc(words(r.label))}</span></span>
+        <span class="verdict"><span class="dot ${cls}"></span>${esc(label)}</span>
+        <span class="when">${int(r.requests)} requests \u00b7 ${esc(clock(r.start))}\u2013${esc(clock(r.end))}</span>
+      </button>`;
+    }).join("");
+    $("#runs").querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => {
+        selected = Number(b.dataset.i); openRequest = null; render();
+      }));
   }
 
-  function renderFocus() {
-    const list = rows();
-    if (!list.length) return;
-    const r = list[Math.min(selected, list.length - 1)];
-    const line = D.queue.review_line;
-    const focus = $("#focus");
-    focus.innerHTML = `
-      <h2>The request</h2>
-      <p class="quote">${esc(r.input)}</p>
-      <p class="sub">${r.input_rest ? esc(r.input_rest) + " \u00b7 " : ""}${esc(clock(r.time, true))}
-        \u00b7 your workflow sent it to <strong>${esc(words(r.final_action))}</strong></p>
-      <dl class="reason">
-        <dt>Routing</dt>
-        <dd>${r.went_to_person
-          ? "your workflow passed this to a person, so it is here as evidence rather than as a task"
-          : "your workflow answered this one on its own"}.</dd>
-        <dt>Flagged</dt>
-        <dd><span class="flagword">${esc(words(r.reason))}</span> at
-          ${esc(words(r.flagged_at))} \u2014 ${esc(words(r.detail))}.</dd>
-        <dt>What to do</dt>
-        <dd>${esc(r.advice)}</dd>
-      </dl>
-      <h2>Where it went</h2>
-      <ul class="path">${r.steps.map((s) => `
-        <li class="${s.flags.length ? "flagged" : ""}">
-          <div class="stage">${esc(words(s.node_id))} \u00b7 asked ${esc(words(s.question))}</div>
-          <div class="took">answered <b>${esc(words(s.branch))}</b>
-            <span class="muted">\u00b7 probability ${num(s.certainty, 2)} \u00b7 ${int(s.latency_ms)} ms</span></div>
-          <div class="bars">${s.top.map(([label, p], i) => `
-            <div class="bar-row">
-              <span class="name">${esc(words(label))}</span>
-              <span class="rail"><span class="fill ${i === 0 ? (p < line ? "low" : "lead") : ""}"
-                style="width:${Math.max(2, Math.round(96 * p))}px"></span></span>
-              <span class="v">${num(p, 2)}</span>
-            </div>`).join("")}</div>
-          ${s.flags.map((f) => `<div class="flag ${esc(f.severity)}">${esc(words(f.label))} \u2014 ${esc(words(f.detail))}</div>`).join("")}
-        </li>`).join("")}</ul>`;
-    focus.style.animation = "none";
-    void focus.offsetWidth;
-    focus.style.animation = "";
+  function pathOf(row) {
+    return `<ul class="path">${row.steps.map((s) => `
+      <li class="${s.flags.length ? "flag" : ""}">
+        <div class="stage">${esc(words(s.node_id))} \u00b7 asked ${esc(words(s.question))}</div>
+        <div class="took">answered <b>${esc(words(s.branch))}</b>
+          <span class="muted">\u00b7 probability ${num(s.certainty, 2)}</span></div>
+        ${s.flags.map((f) => `<div class="note2">${esc(words(f.label))} \u2014 ${esc(words(f.detail))}</div>`).join("")}
+      </li>`).join("")}</ul>`;
   }
 
-  function render() {
-    renderMasthead();
-    renderRibbon();
-    renderFilters();
-    renderFlow();
-    renderRows();
-    renderFocus();
+  function renderAudit() {
+    const runs = D.runs || [];
+    if (!runs.length) { $("#audit").innerHTML = '<p class="empty">No runs recorded.</p>'; return; }
+    const r = runs[Math.min(selected, runs.length - 1)];
+    const [cls, verdictLabel] = VERDICT[r.verdict] || ["no", r.verdict];
+    const flagged = (D.queue.rows || [])
+      .filter((row) => r.request_ids.includes(row.request_id) && row.status === "acted_alone");
+
+    const changed = r.changes.length
+      ? `<ul>${r.changes.map((c) => `<li>${esc(c.plain)}
+           <span class="where">at ${esc(words(c.node_id))}</span></li>`).join("")}</ul>`
+      : `<p class="empty">${r.index === 1
+          ? "This is where the recording starts."
+          : "Nothing in the configuration changed — same wording, same options, same versions."}</p>`;
+
+    const effects = r.effects.length
+      ? r.effects.map((e) => `<p class="effect">${esc(e.plain)}
+          <span class="p">p=${e.p_value < 0.001 ? "<0.001" : e.p_value.toFixed(3)}</span></p>`).join("")
+      : `<p class="empty">${esc(r.verdict_detail)}</p>`;
+
+    const ev = r.evidence;
+    const evidence = ev.total
+      ? `<p style="margin-bottom:12px"><strong>${int(ev.changed)} of ${int(ev.total)}</strong>
+           inputs that arrived in both runs were answered differently the second time.</p>` +
+        ev.pairs.map((p) => `
+          <div class="pair">
+            <p class="text">${esc(p.input)}</p>
+            <div class="sides">
+              <span class="side">before <b>${esc(words(p.before.branch))}</b> · ${num(p.before.certainty, 2)}</span>
+              <span class="arrow">\u2192</span>
+              <span class="side">after <b>${esc(words(p.after.branch))}</b> · ${num(p.after.certainty, 2)}</span>
+            </div>
+          </div>`).join("")
+      : `<p class="empty">No input arrived in both runs, so there is nothing to compare
+           side by side. The numbers above are still a comparison of the two populations.</p>`;
+
+    $("#audit").innerHTML = `
+      <p class="head">Run ${r.index} \u00b7 ${esc(words(r.label))}</p>
+      <p class="scope">${int(r.requests)} requests \u00b7 ${int(r.decisions)} decisions \u00b7
+        ${esc(clock(r.start, true))} to ${esc(clock(r.end, true))}${
+          r.compared_against ? ` \u00b7 measured against the ${int(r.compared_against)} requests before it` : ""}</p>
+
+      <div class="block">
+        <h2>What changed</h2>
+        ${changed}
+      </div>
+
+      <div class="block">
+        <h2>What it did</h2>
+        ${effects}
+      </div>
+
+      <div class="block">
+        <h2>Verdict</h2>
+        <p class="verdict-line ${cls}"><b>${esc(verdictLabel[0].toUpperCase() + verdictLabel.slice(1))}</b></p>
+        ${r.advice ? `<p>${esc(r.advice)}</p>` : ""}
+      </div>
+
+      <div class="block">
+        <h2>The same input, before and after</h2>
+        ${evidence}
+      </div>
+
+      <div class="block">
+        <h2>Answered alone in this run, but shouldn\u2019t have</h2>
+        ${flagged.length
+          ? `<ul class="flagged">${flagged.map((row, i) => `
+              <li>
+                <button data-r="${i}">${esc(row.input)}
+                  <span class="why">${esc(words(row.reason))} at ${esc(words(row.flagged_at))}</span>
+                </button>
+                ${openRequest === row.request_id ? pathOf(row) : ""}
+              </li>`).join("")}</ul>`
+          : `<p class="empty">None. Every flagged request in this run had already gone to a person.</p>`}
+      </div>`;
+
+    $("#audit").querySelectorAll(".flagged button").forEach((b) =>
+      b.addEventListener("click", () => {
+        const row = flagged[Number(b.dataset.r)];
+        openRequest = openRequest === row.request_id ? null : row.request_id;
+        renderAudit();
+      }));
   }
+
+  function render() { renderMasthead(); renderRuns(); renderAudit(); }
 
   const root = document.documentElement;
   const prefersDark = matchMedia("(prefers-color-scheme: dark)");
@@ -533,7 +441,6 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
     }, D.meta.live_interval_ms);
   }
 
-  addEventListener("scroll", hideTip, { passive: true });
   syncTheme();
   render();
 })();

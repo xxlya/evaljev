@@ -6,8 +6,8 @@ EvalJev instruments typed probabilistic decisions, links them to downstream outc
 
 > Jev makes decisions fast. EvalJev helps you know when those decisions — and the workflow around them — are reliable.
 
-**Live console: <https://xxlya.github.io/evaljev/>** — which decisions your workflow made
-on its own that it should not have, and where along the way each one went wrong. A three-step support assistant, 351 real
+**Live run audit: <https://xxlya.github.io/evaljev/>** — every change you shipped to a Jev
+workflow, what it did to real requests, and whether to keep it. A three-step support assistant, 351 real
 decisions, and the question edit that quietly started routing customers to a human. Point
 it at your own traces and you get the same screen:
 
@@ -476,9 +476,12 @@ why both are reported.
 
 ## The console
 
-The console answers the operational question — **does anything need a person right now,
-and where did it go wrong** — and nothing else. It is one file, no service, no key, no
-network call.
+The console audits **runs**. A run is a stretch of traffic your workflow answered with one
+configuration — the unit you actually ship and roll back. Every time a question's wording,
+its options, the policy or the model changes, that is a new run, and it gets measured
+against the last stretch that held still.
+
+It is one file, no service, no key, no network call.
 
 ```bash
 pip install "git+https://github.com/xxlya/evaljev"   # not on PyPI yet
@@ -490,25 +493,32 @@ evaljev demo                          # the screen, on the recorded example run
 
 Live example: **<https://xxlya.github.io/evaljev/>**
 
-It opens with a sentence, because a count without its denominator says nothing:
+Each run gets four lines and a verdict:
 
-> Your workflow answered **26 of 117** requests without a person. **14 of those it should
-> not have.** It caught 47 others itself and passed them on. The classify request step
-> started answering differently partway through this window.
+```
+RUN 4 · category v4 · 24 requests · measured against the 93 requests before it
 
-That second number is the one the console is built around. An earlier version counted
-every flagged request as "needs a person" — on this workflow that read **48**, which was
-close to meaningless: the assistant already routes 92 of 117 requests to a human by its
-own policy, so the count mostly restated what the application had already decided. A flag
-only asks something of a reader when it **contradicts what the workflow did**.
+  what changed   the instructions for "category" were rewritten
+                 6 option descriptions reworded — the labels themselves are unchanged
+  what it did    answers needing a second look: 0% → 16.7%   (p=0.001)
+                 typical certainty: 1.00 → 0.84              (p<0.001)
+                 accuracy on reviewed decisions: 100% → 62.5% (p=0.006)
+  evidence       13 of 24 inputs that arrived in both runs were answered differently
+  verdict        HARMFUL — roll it back, or fix what it changed
+```
 
-So requests split three ways, and only the first is a queue:
+Verdicts are `harmful`, `improvement`, `no effect shown`, `too early to tell`, and
+`baseline` for the first one. **"No effect shown" is never rendered as "safe"** — it says
+how much traffic it had and that a change would have to be large to show up at that size.
 
-| | |
-| --- | --- |
-| **answered alone, but shouldn't have** | flagged, and the workflow acted without a person |
-| **flagged, already with a person** | the escalation policy caught it — evidence it is earning its keep, not a task |
-| **came through clear** | nothing flagged; counted, not listed |
+The baseline is not the previous run but **the last stretch that held still**: every run
+since the last one that moved something, pooled. Two dozen requests against two dozen
+cannot establish a rate change that ninety against two dozen can, and runs that changed
+nothing are part of the same regime.
+
+Inside a run, the requests it **answered alone and should not have** are listed with the
+path each one took. Requests the workflow escalated itself are counted but not queued: a
+flag only asks something of you when it contradicts what the workflow did.
 
 Which branches mean "a person is involved" is matched by name (`human`, `needs_review`,
 `escalate`, …) and the page says the match was inferred. `--human-actions refund,escalate`
