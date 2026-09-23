@@ -93,8 +93,8 @@ def test_no_outcomes_means_unknown_not_healthy():
     assert check(report, "outcomes")["status"] == "unknown"
     assert check(report, "calibration")["status"] == "unknown"
     assert "Results are coming back" in report["headline"]["unknown"]
-    # An unknown must not be scored as a pass or as a failure.
-    assert report["headline"]["score"] == 100
+    # An unknown must not be read as a pass or as a failure.
+    assert report["headline"]["status"] == "ok"
 
 
 def test_answer_outside_the_declared_options_is_a_problem():

@@ -779,8 +779,7 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
     $("#verdict-title").textContent =
       h.status === "ok" ? "Looks healthy" :
       h.status === "watch" ? "Mostly healthy" : "Needs attention";
-    $("#verdict-summary").innerHTML = esc(h.summary) +
-      ` <span class="muted">(health score ${h.score}/100 — 25 points off per problem, 8 per warning.)</span>`;
+    $("#verdict-summary").innerHTML = esc(h.summary);
     $("#verdict-unknown").innerHTML = h.unknown.length
       ? "Not enough data to answer: " +
         h.unknown.map((t) => "“" + esc(t) + "”").join(", ") +
@@ -1045,7 +1044,7 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
     const grouped = [];
     const seen = new Map();
     rows.forEach((f) => {
-      const key = f.component + "\u0000" + f.summary;
+      const key = f.component + "\u0000" + (f.plain || f.summary);
       if (!seen.has(key)) { seen.set(key, { ...f, nodes: [], moved: [] }); grouped.push(seen.get(key)); }
       const g = seen.get(key);
       g.nodes.push(f.node_id);
@@ -1055,7 +1054,7 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
       <thead><tr><th>What changed</th><th>Where</th><th>Evidence</th><th>Behaviour moved?</th></tr></thead>
       <tbody>${grouped.map((f) => `
         <tr>
-          <td><strong>${esc(f.component)}</strong><br><span class="muted">${esc(f.summary)}</span></td>
+          <td><strong>${esc(words(f.component))}</strong><br><span class="muted">${esc(f.plain || f.summary)}</span></td>
           <td>${f.nodes.length > 3
                 ? `<span class="muted">${f.nodes.length} decision points</span>`
                 : f.nodes.map((n) => esc(words(n))).join(", ")}</td>

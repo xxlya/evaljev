@@ -3,29 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EvalJev — how it works</title>
-<meta name="description" content="A live-data walkthrough of EvalJev: calibration, decision instability, drift attribution and gated schema repair for Jev-class typed decision models.">
+<title>How the console decides — EvalJev</title>
+<meta name="description" content="The rules behind the EvalJev console: what gets flagged, what the flags mean, and what the tool cannot see.">
 <style>
   :root {
     color-scheme: light;
-    --surface-0: #f6f6f4;
-    --surface-1: #fcfcfb;
-    --surface-2: #eeeeea;
+    --surface-0: #f7f5f0;
+    --surface-1: #fdfcf9;
+    --surface-2: #efece4;
     --border:    #dedcd5;
     --border-strong: #c9c7be;
     --text-primary:   #0b0b0b;
     --text-secondary: #52514e;
     --text-muted:     #76756f;
     --series-1: #2a78d6;
+    --series-1-wash: rgba(42,120,214,.12);
     --series-2: #eb6834;
     --good:     #007a4d;
+    --good-wash: rgba(0,122,77,.12);
     --warning:  #8a6100;
+    --warning-wash: rgba(138,97,0,.12);
     --critical: #b3261e;
+    --critical-wash: rgba(179,38,30,.12);
     --grid: #e4e3dd;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
-    --radius: 10px;
-    --maxw: 1080px;
+    --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --radius: 12px;
+    --maxw: 1180px;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
@@ -39,10 +44,14 @@
       --text-secondary: #c3c2b7;
       --text-muted:     #94938a;
       --series-1: #3987e5;
+      --series-1-wash: rgba(57,135,229,.16);
       --series-2: #d95926;
       --good:     #4cb782;
+      --good-wash: rgba(76,183,130,.14);
       --warning:  #d9a418;
+      --warning-wash: rgba(217,164,24,.14);
       --critical: #e66767;
+      --critical-wash: rgba(230,103,103,.14);
       --grid: #2c2c29;
     }
   }
@@ -57,10 +66,14 @@
     --text-secondary: #c3c2b7;
     --text-muted:     #94938a;
     --series-1: #3987e5;
+    --series-1-wash: rgba(57,135,229,.16);
     --series-2: #d95926;
     --good:     #4cb782;
+    --good-wash: rgba(76,183,130,.14);
     --warning:  #d9a418;
+    --warning-wash: rgba(217,164,24,.14);
     --critical: #e66767;
+    --critical-wash: rgba(230,103,103,.14);
     --grid: #2c2c29;
   }
 
@@ -70,316 +83,241 @@
     font-family: var(--sans); font-size: 15px; line-height: 1.6;
     -webkit-font-smoothing: antialiased;
   }
-  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 20px; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 16px; }
+  @media (min-width: 720px) { .wrap { padding: 0 24px; } }
 
-  header.hero { padding: 56px 0 28px; border-bottom: 1px solid var(--border); }
-  .eyebrow {
-    font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
-    text-transform: uppercase; color: var(--text-muted); margin: 0 0 10px;
-  }
-  h1 { font-size: clamp(28px, 4.5vw, 42px); line-height: 1.15; margin: 0 0 12px; letter-spacing: -.02em; }
-  .lede { font-size: 17px; color: var(--text-secondary); max-width: 62ch; margin: 0 0 18px; }
-  .provenance {
-    font-family: var(--mono); font-size: 12px; color: var(--text-muted);
-    border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 10px 12px; background: var(--surface-1); display: inline-block;
-  }
 
-  nav.toc {
-    position: sticky; top: 0; z-index: 20; background: var(--surface-0);
-    border-bottom: 1px solid var(--border); padding: 10px 0;
-    backdrop-filter: saturate(140%) blur(6px);
-  }
-  nav.toc .wrap { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  nav.toc a {
-    font-size: 13px; color: var(--text-secondary); text-decoration: none;
-    padding: 5px 10px; border-radius: 6px; white-space: nowrap;
-  }
-  nav.toc a:hover { background: var(--surface-2); color: var(--text-primary); }
+  .topbar { border-bottom: 1px solid var(--border); }
+  .topbar .wrap { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
+  .mark { font-family: var(--mono); font-size: 11.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-muted); }
+  .mark b { color: var(--text-primary); font-weight: 600; }
   .spacer { flex: 1; }
-  button.ghost {
-    font: inherit; font-size: 13px; cursor: pointer; color: var(--text-secondary);
-    background: var(--surface-1); border: 1px solid var(--border);
-    border-radius: 6px; padding: 5px 10px;
-  }
-  button.ghost:hover { border-color: var(--border-strong); color: var(--text-primary); }
+  a.ghost { font-size: 13px; color: var(--text-secondary); text-decoration: none; margin-left: 14px;
+            border-bottom: 1px solid transparent; }
+  a.ghost:hover { color: var(--text-primary); border-bottom-color: var(--text-muted); }
+  .wrap { max-width: 860px; }
 
-  section { padding: 44px 0 8px; scroll-margin-top: 58px; }
-  h2 { font-size: 22px; margin: 0 0 6px; letter-spacing: -.01em; }
-  h3 { font-size: 15px; margin: 24px 0 8px; }
-  .sub { color: var(--text-secondary); max-width: 68ch; margin: 0 0 20px; }
-  p { max-width: 68ch; }
+  header.top { padding: 54px 0 0; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
+             color: var(--text-muted); margin: 0 0 14px; }
+  h1 { font-family: var(--serif); font-weight: 400; font-size: clamp(32px, 5vw, 48px); line-height: 1.06;
+       letter-spacing: -.02em; margin: 0 0 18px; }
+  .lede { font-size: 19px; line-height: 1.55; max-width: 34em; margin: 0; }
 
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; margin: 20px 0; }
-  .tile {
-    background: var(--surface-1); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 14px 16px;
-  }
-  .tile .k { font-family: var(--mono); font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
-  .tile .v { font-size: 26px; font-weight: 600; letter-spacing: -.02em; margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .tile .n { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+  section { padding: 46px 0 0; }
+  h2 { font-family: var(--serif); font-weight: 400; font-size: 26px; letter-spacing: -.01em; margin: 0 0 6px; }
+  .sub { color: var(--text-secondary); max-width: 40em; margin: 0 0 22px; font-size: 15px; }
+  p { max-width: 40em; line-height: 1.65; }
 
-  .card {
-    background: var(--surface-1); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 18px; margin: 16px 0;
-  }
-  .card > h3:first-child { margin-top: 0; }
-  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px,1fr)); gap: 14px; }
+  .rules { border-top: 1px solid var(--border); }
+  .rule { border-bottom: 1px solid var(--border); padding: 18px 0; display: grid;
+          grid-template-columns: 210px 1fr; gap: 24px; align-items: baseline; }
+  @media (max-width: 680px) { .rule { grid-template-columns: 1fr; gap: 4px; } }
+  .rule .what { font-size: 15px; font-weight: 600; }
+  .rule .what .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+  .rule .how { margin: 0; font-size: 14.5px; color: var(--text-secondary); line-height: 1.6; }
+  .rule .how b { color: var(--text-primary); font-weight: 600; }
 
-  figure { margin: 0; }
-  figcaption { font-size: 13px; color: var(--text-secondary); margin-top: 10px; }
-  .chart-title { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
-  .chart-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+  figure { margin: 26px 0 0; }
+  figcaption { font-size: 13.5px; color: var(--text-secondary); margin-top: 14px; max-width: 44em; line-height: 1.6; }
   svg { display: block; width: 100%; height: auto; overflow: visible; }
-  .grid-line { stroke: var(--grid); stroke-width: 1; }
   .axis-text { fill: var(--text-muted); font-size: 11px; font-family: var(--mono); }
-  .label-text { fill: var(--text-secondary); font-size: 12px; }
-  .value-text { fill: var(--text-primary); font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 600; }
-  .rule { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 4 3; }
+  .label-text { fill: var(--text-secondary); font-size: 12.5px; }
+  .value-text { fill: var(--text-primary); font-size: 12.5px; font-weight: 600; }
+  .rule-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 4 3; }
 
-  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12px; color: var(--text-secondary); }
-  .legend span.sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+  table { border-collapse: collapse; font-size: 14px; margin-top: 18px; }
+  th, td { text-align: left; padding: 7px 26px 7px 0; border-bottom: 1px solid var(--border); }
+  th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+       color: var(--text-muted); font-weight: 500; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
-  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); font-weight: 500; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 12px; }
-  tbody tr:last-child td { border-bottom: none; }
-  .scroll-x { overflow-x: auto; }
-
-  code, pre { font-family: var(--mono); }
-  code { font-size: .9em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
-  pre {
-    background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
-    padding: 14px; overflow-x: auto; font-size: 12px; line-height: 1.55; margin: 0;
-  }
+  code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+        overflow-x: auto; font-size: 12.5px; line-height: 1.6; font-family: var(--mono); }
   pre code { background: none; padding: 0; }
-
-  .badge {
-    display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono);
-    font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor;
-    text-transform: uppercase; letter-spacing: .05em;
-  }
-  .badge.good { color: var(--good); }
-  .badge.warn { color: var(--warning); }
-  .badge.bad  { color: var(--critical); }
-
-  .callout {
-    border-left: 3px solid var(--series-2); background: var(--surface-1);
-    border-radius: 0 8px 8px 0; padding: 14px 16px; margin: 18px 0;
-  }
-  .callout strong { color: var(--text-primary); }
-
-  #tip {
-    position: fixed; pointer-events: none; opacity: 0; transition: opacity .1s;
-    background: var(--surface-1); color: var(--text-primary);
-    border: 1px solid var(--border-strong); border-radius: 7px;
-    padding: 7px 10px; font-size: 12px; font-family: var(--mono);
-    box-shadow: 0 6px 20px rgba(0,0,0,.16); z-index: 60; max-width: 280px;
-  }
-  .hit { cursor: crosshair; }
-
-  footer { border-top: 1px solid var(--border); margin-top: 48px; padding: 28px 0 56px; color: var(--text-secondary); font-size: 13px; }
-  footer a { color: var(--series-1); }
+  details { margin-top: 20px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--text-secondary); }
+  details[open] summary { margin-bottom: 12px; }
   .muted { color: var(--text-muted); }
-  details summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
-  details[open] summary { margin-bottom: 10px; }
+  footer { border-top: 1px solid var(--border); margin-top: 56px; padding: 26px 0 64px;
+           color: var(--text-secondary); font-size: 13.5px; }
+  footer a { color: var(--text-primary); }
 </style>
 </head>
 <body>
-<div id="tip" role="status" aria-live="polite"></div>
 
-<header class="hero">
+<div class="topbar">
   <div class="wrap">
-    <p class="eyebrow">EvalJev · how it works</p>
-    <h1>The evidence behind the dashboard</h1>
+    <span class="mark">Eval<b>Jev</b></span>
+    <span class="spacer"></span>
+    <a class="ghost" href="./">Console</a>
+    <a class="ghost" href="report.html">Full report</a>
+    <a class="ghost" href="https://github.com/xxlya/evaljev">GitHub</a>
+  </div>
+</div>
+
+<header class="top">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h1>What the console decides, and what it can’t</h1>
     <p class="lede">
-      The <a href="./">console</a> is what you look at every day. This page is why it
-      says what it says: the measurements the library was built on, each one produced
-      against the live API. JevBench asks whether a decision model is good; EvalJev asks
-      whether the workflow you deployed is still healthy — and when it isn't, what broke.
+      The console pulls one thing out of a stream of decisions: the ones your workflow
+      answered on its own that it probably should not have. Here is every rule it uses
+      to pick them, and the things it is blind to.
     </p>
-    <p class="provenance" id="provenance">loading…</p>
   </div>
 </header>
 
-<nav class="toc">
-  <div class="wrap">
-    <a href="./">&larr; Console</a>
-    <a href="report.html">Full report</a>
-    <a href="#run">The run</a>
-    <a href="#instability">Instability</a>
-    <a href="#confidence">Confidence</a>
-    <a href="#drift">Drift</a>
-    <a href="#repair">Repair</a>
-    <a href="#trace">Trace</a>
-    <span class="spacer"></span>
-    <button class="ghost" id="theme-toggle" type="button">Theme</button>
-  </div>
-</nav>
-
 <main class="wrap">
 
-<section id="run">
-  <h2>One benchmark run, fully instrumented</h2>
-  <p class="sub">
-    The JevBench <code>original</code> split — 72 typed decisions across six families and
-    three question types, monitored end to end under a hard spend cap.
-  </p>
-  <div class="tiles" id="tiles"></div>
-
-  <div class="card">
-    <div class="chart-title">Calibration error by decision family</div>
-    <div class="chart-sub">Expected calibration error on <code>p_max</code>, lower is better. Bars are labeled directly; the full table is below.</div>
-    <figure><div id="chart-ece"></div></figure>
+<section>
+  <h2>The five reasons a decision gets flagged</h2>
+  <p class="sub">There are only five. Each is a rule you can check by hand.</p>
+  <div class="rules">
+    <div class="rule">
+      <div class="what"><span class="dot" style="background:var(--critical)"></span>The answer broke your schema</div>
+      <p class="how">The probabilities that came back were not over the options you declared —
+        a label you never defined, a missing one, or numbers that do not add up to 1.
+        Whatever your code did with that answer, it did by accident. <b>Needs no ground truth.</b></p>
+    </div>
+    <div class="rule">
+      <div class="what"><span class="dot" style="background:var(--critical)"></span>A reviewer disagreed</div>
+      <p class="how">You recorded what actually happened, and it contradicts what was decided.
+        The only flag that is confirmed rather than suspected.</p>
+    </div>
+    <div class="rule">
+      <div class="what"><span class="dot" style="background:var(--critical)"></span>The same input was decided two ways</div>
+      <p class="how">An identical input, under the identical question, took a different branch
+        somewhere else in the same stream. The decision is sitting on a boundary.
+        <b>Needs no ground truth.</b></p>
+    </div>
+    <div class="rule">
+      <div class="what"><span class="dot" style="background:var(--critical)"></span>The model was unsure</div>
+      <p class="how">It put less probability on its answer than your review line — 0.60 by default,
+        and your number to set. Not the API’s <code>confidence</code> field; see below.
+        <b>Needs no ground truth.</b></p>
+    </div>
+    <div class="rule">
+      <div class="what"><span class="dot" style="background:var(--warning)"></span>The step had just changed</div>
+      <p class="how">That decision point started answering differently partway through this window,
+        so its answers are suspect even when they look confident. <b>Needs no ground truth.</b></p>
+    </div>
   </div>
+  <p style="margin-top:22px">
+    A flag only reaches you when it <strong>contradicts what your workflow did</strong>. If the
+    workflow already sent that request to a person, the flag is counted as evidence your
+    escalation policy is working, not handed to you as a task.
+  </p>
+</section>
 
-  <details class="card">
-    <summary>Table view — every family</summary>
-    <div class="scroll-x"><table id="family-table">
-      <thead><tr>
-        <th>Family</th><th>Type</th><th>k</th><th class="num">n</th><th class="num">Accuracy</th>
-        <th class="num">ECE</th><th class="num">Adherence</th><th class="num">p50 ms</th><th class="num">Cost</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table></div>
+<section>
+  <h2>Three rules it holds itself to</h2>
+  <div class="rules">
+    <div class="rule">
+      <div class="what">A rate is never a single number</div>
+      <p class="how">One flip in 36 is not 2.8%; it is somewhere between 0.5% and 14%. Every rate
+        carries that range, because deployment decisions get made on the difference.</p>
+    </div>
+    <div class="rule">
+      <div class="what">“Not measured” never reads as “fine”</div>
+      <p class="how">Too little evidence means nothing was shown, which is not the same as nothing
+        being wrong. Those checks say so and are left out of the score.</p>
+    </div>
+    <div class="rule">
+      <div class="what">A change has to clear a test</div>
+      <p class="how">“Answers moved” only appears when the shift is unlikely to be a coincidence of
+        small numbers <em>and</em> big enough to act on. Both, because either alone is wrong:
+        on a tight distribution, a move of 0.01 is statistically real and worth nothing.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Why any of this is needed</h2>
+  <p class="sub">
+    One decision, asked two ways that mean the same thing, five times each. Both phrasings
+    are correct to answer <em>yes</em>.
+  </p>
+  <figure>
+    <div id="chart-resample"></div>
+    <figcaption id="resample-caption"></figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>One trap worth knowing</h2>
+  <p>
+    Jev returns a <code>confidence</code> field, and it is <strong>not a probability</strong>. It is a
+    margin over an even split, so the same threshold means a different thing for every question
+    depending on how many options it has. A cutoff of <code>confidence &lt; 0.55</code> fires here:
+  </p>
+  <table id="k-table">
+    <thead><tr><th>Options in the question</th><th>…which is really a probability of</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p style="margin-top:18px">
+    Add one option to a question and every threshold keyed on confidence moves, with no model
+    change and no code change. EvalJev thresholds on the probability itself, and flags an option-set
+    change as its own finding for exactly this reason.
+  </p>
+</section>
+
+<section>
+  <h2>What it cannot see</h2>
+  <p class="sub">The part usually left off a page like this.</p>
+  <div class="rules">
+    <div class="rule">
+      <div class="what">Whether your inputs still mean the same thing</div>
+      <p class="how">It compares the <em>shape</em> of the inputs — which fields are there, how big they
+        are. A clean result is not evidence your traffic is unchanged; the same fields can carry
+        completely different requests.</p>
+    </div>
+    <div class="rule">
+      <div class="what">Whether your options are the right options</div>
+      <p class="how">It can tell you the model is hesitating between two of them. It cannot tell you
+        the two should have been one, or that a third is missing.</p>
+    </div>
+    <div class="rule">
+      <div class="what">Anything before you started recording</div>
+      <p class="how">Every comparison is against the history in the file you pass it. A workflow that
+        was already broken when recording started looks steady.</p>
+    </div>
+    <div class="rule">
+      <div class="what">Whether an unreviewed decision was right</div>
+      <p class="how">Accuracy only exists where you recorded an outcome. If outcomes only come back
+        for the requests a person looked at, that number is review accuracy, not workflow accuracy.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>What gets recorded</h2>
+  <p class="sub">
+    One decision, as stored. Generic LLM tracing keeps the prompt and the completion; this keeps
+    the full distribution, the question that produced it, four version fields and the outcome —
+    which is what makes every rule above computable later.
+  </p>
+  <details>
+    <summary>Show one real trace</summary>
+    <pre><code id="trace-json">loading…</code></pre>
   </details>
-</section>
-
-<section id="instability">
-  <h2>The finding that justifies the whole library</h2>
-  <p class="sub">
-    Across 72 decisions there was exactly one wrong answer and exactly one paraphrase
-    flip — and they are the same item. An inclusive-boundary policy question, asked two
-    equivalent ways.
-  </p>
-
-  <div class="card">
-    <div class="chart-title">P(true) for two phrasings of one decision, 5 repeats each</div>
-    <div class="chart-sub">Both phrasings mean the same thing, and the correct answer is <em>yes</em> for both.</div>
-    <div class="legend" id="legend-resample"></div>
-    <figure>
-      <div id="chart-resample"></div>
-      <figcaption>
-        Each input is near-deterministic (σ ≈ 0.005), yet the two phrasings sit on opposite
-        sides of the 0.5 decision threshold. The flip is a reproducible sensitivity to wording,
-        not sampling noise — repeating an input cannot find it, only perturbing it can.
-      </figcaption>
-    </figure>
-  </div>
-
-  <div class="callout">
-    <strong>Why this matters in production.</strong> There is no <code>expected</code> column on
-    live traffic. But the paraphrase flip is observable without any label — and here it pointed
-    at the one decision out of 72 that was wrong.
-  </div>
-</section>
-
-<section id="confidence">
-  <h2><code>confidence</code> is a margin, not a probability</h2>
-  <p class="sub">
-    The API reports <code>c = (p_max − 1/k) / (1 − 1/k)</code> — verified against 48 live
-    answers to within the two-decimal reporting granularity. It carries no information
-    beyond <code>p_max</code> and the option count <code>k</code>, which has a sharp
-    consequence for anyone thresholding on it.
-  </p>
-
-  <div class="card">
-    <div class="chart-title">Where <code>confidence &lt; 0.55</code> actually fires</div>
-    <div class="chart-sub">The same threshold, expressed as the probability it corresponds to, for each option count.</div>
-    <figure>
-      <div id="chart-k"></div>
-      <figcaption>
-        Add one option to a <code>criteria</code> map and every threshold keyed on confidence
-        moves — with no model change, no code change and no accuracy change. This is why
-        attribution reports an <code>option_set</code> change as its own finding, and why a
-        repair proposal may not alter the label set.
-      </figcaption>
-    </figure>
-  </div>
-</section>
-
-<section id="drift">
-  <h2>Noticing, then attributing</h2>
-  <p class="sub">
-    Monitoring is a delta against a baseline. <code>drift_report</code> windows a trace
-    stream and tests the newest window against the pooled history — but two guards exist
-    because running it on real traces showed the report is misleading without them.
-  </p>
-
-  <div class="grid2">
-    <div class="card" id="drift-mixed"></div>
-    <div class="card" id="drift-filtered"></div>
-  </div>
-
-  <h3>What changed, according to the traces</h3>
-  <p class="sub">
-    Four of the five components of a deployed decision are recorded on every trace, so
-    naming the one that moved is a diff — deterministic, reproducible and auditable.
-  </p>
-  <div class="card"><div class="scroll-x"><table id="attribution-table">
-    <thead><tr><th>Component</th><th>Evidence</th></tr></thead><tbody></tbody>
-  </table></div></div>
-</section>
-
-<section id="repair">
-  <h2>Repair, gated on evidence</h2>
-  <p class="sub" id="repair-sub"></p>
-
-  <div class="card">
-    <h3>The funnel: free, then cheap, then expensive</h3>
-    <div class="scroll-x"><table id="repair-table">
-      <thead><tr><th>Stage</th><th>Checks</th><th>Cost</th><th class="num">Rejected</th></tr></thead>
-      <tbody></tbody>
-    </table></div>
-    <p style="margin-top:14px" id="repair-verdict"></p>
-    <blockquote style="margin:10px 0 0;padding-left:14px;border-left:3px solid var(--border-strong);color:var(--text-secondary);font-size:14px" id="repair-rationale"></blockquote>
-  </div>
-
-  <div class="card" id="power-card"></div>
-
-  <div class="card">
-    <h3>Three properties that are structural, not configurable</h3>
-    <ul style="margin:0;padding-left:20px;color:var(--text-secondary)">
-      <li><strong>Nothing is ever applied.</strong> The cycle returns ranked proposals with their evidence; a human applies them.</li>
-      <li><strong>The proposer never sees the holdout.</strong> Traces split deterministically by hashed <code>trace_id</code>, so a proposal cannot be laundered by re-rolling the split.</li>
-      <li><strong>A candidate may not change the label set.</strong> That would move every downstream confidence threshold while looking like a wording fix.</li>
-    </ul>
-  </div>
-
-  <div class="card" id="batching-card"></div>
-</section>
-
-<section id="trace">
-  <h2>The object everything is built on</h2>
-  <p class="sub">
-    One real <code>DecisionTrace</code>. Generic LLM observability records prompt and
-    completion; this records the full distribution, the question schema, four independent
-    version axes, and the downstream outcome — which is what makes the diffs above possible.
-  </p>
-  <div class="card"><pre><code id="trace-json">loading…</code></pre></div>
+  <p style="margin-top:24px">Run it on your own traffic:</p>
+  <pre><code>pip install "git+https://github.com/xxlya/evaljev"
+evaljev console traces.jsonl --open</code></pre>
 </section>
 
 </main>
 
 <footer>
   <div class="wrap">
-    <p style="margin-top:0">
-      <strong>Reproduce it.</strong> The page reads <code>docs/data.js</code>, regenerated by
-      <code>python benchmarks/export_demo_data.py</code> from the stored traces — so the demo
-      cannot drift from the run that produced it.
-    </p>
-    <pre><code>git clone https://github.com/fstandhartinger/jevbench.git /tmp/jevbench
-python benchmarks/run_jevbench.py --data /tmp/jevbench/datasets/public/original.jsonl --cap 5.00
-python benchmarks/export_demo_data.py</code></pre>
-    <p>
-      <strong>Your own workflow.</strong> <code>pip install "git+https://github.com/xxlya/evaljev"</code>, record the decisions
-      you already make, then <code>evaljev report traces.jsonl -o report.html</code> for the
-      <a href="./">dashboard</a> on your traffic.
-    </p>
-    <p class="muted" style="margin-bottom:0">
-      Charts are hand-built SVG, no dependencies. Palette validated for colour-vision
-      deficiency in both light and dark modes; every chart also ships a table or direct labels.
+    <p id="provenance" class="muted"></p>
+    <p style="margin-bottom:0">
+      The numbers on this page come from a labelled public benchmark
+      (<a href="https://github.com/fstandhartinger/jevbench">JevBench</a>) used as a fixture —
+      labels are how you check that a label-free detector fires when it should. The full
+      benchmark run, the repair experiment and the measurement scripts are in the
+      <a href="https://github.com/xxlya/evaljev">repository</a>, not on this page.
     </p>
   </div>
 </footer>
@@ -390,248 +328,70 @@ python benchmarks/export_demo_data.py</code></pre>
   "use strict";
   const D = window.EVALJEV_DATA;
   const $ = (s) => document.querySelector(s);
-  const fmt = (x, n = 3) => Number(x).toFixed(n);
-  const pct = (x) => (x * 100).toFixed(1) + "%";
   const el = (tag, attrs, text) => {
     const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
     for (const k in attrs) n.setAttribute(k, attrs[k]);
     if (text != null) n.textContent = text;
     return n;
   };
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-  /* ---------- theme ---------- */
-  const root = document.documentElement;
-  const prefersDark = matchMedia("(prefers-color-scheme: dark)");
-  const currentTheme = () =>
-    root.getAttribute("data-theme") || (prefersDark.matches ? "dark" : "light");
-  const btn = $("#theme-toggle");
-  function syncButton() {
-    btn.textContent = currentTheme() === "dark" ? "Light mode" : "Dark mode";
-  }
-  btn.addEventListener("click", () => {
-    root.setAttribute("data-theme", currentTheme() === "dark" ? "light" : "dark");
-    syncButton();
-    render();
-  });
-  // Follow the OS while the viewer has not chosen explicitly.
-  prefersDark.addEventListener("change", () => {
-    if (!root.hasAttribute("data-theme")) { syncButton(); render(); }
-  });
-
-  /* ---------- tooltip ---------- */
-  const tip = $("#tip");
-  function bindTip(node, html) {
-    node.classList.add("hit");
-    node.addEventListener("pointerenter", (e) => {
-      tip.innerHTML = html;
-      tip.style.opacity = "1";
-      move(e);
-    });
-    node.addEventListener("pointermove", move);
-    node.addEventListener("pointerleave", () => (tip.style.opacity = "0"));
-    function move(e) {
-      const pad = 14;
-      let x = e.clientX + pad, y = e.clientY + pad;
-      const r = tip.getBoundingClientRect();
-      if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
-      if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
-      tip.style.left = x + "px";
-      tip.style.top = y + "px";
-    }
-  }
-
-  /* ---------- static text ---------- */
-  $("#provenance").textContent =
-    `model ${D.model} · ${D.overall.n} decisions · source ${D.generated_from}`;
-
-  const o = D.overall;
-  $("#tiles").innerHTML = [
-    ["Decisions", o.n, `${o.correct} matched the human label`],
-    ["Accuracy", pct(o.accuracy), "against JevBench labels"],
-    ["Schema adherence", pct(o.adherence), "valid distributions, no labels needed"],
-    ["Paraphrase flips", `${o.paraphrase_flips} / ${o.paraphrase_pairs}`, "equivalent phrasings that disagreed"],
-    ["Latency", `${o.p50_ms} ms`, `p95 ${o.p95_ms} ms`],
-    ["Cost", "$" + fmt(o.cost_usd, 4), `$${o.cost_per_decision.toFixed(6)} per decision`],
-  ].map(([k, v, n]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="n">${n}</div></div>`).join("");
-
-  $("#family-table").querySelector("tbody").innerHTML = D.families.map((f) => `
-    <tr><td>${f.family}</td><td class="muted">${f.qtype}</td><td class="num">${f.k}</td>
-    <td class="num">${f.n}</td><td class="num">${fmt(f.accuracy)}</td><td class="num">${fmt(f.ece, 4)}</td>
-    <td class="num">${fmt(f.adherence)}</td><td class="num">${f.p50_ms}</td>
-    <td class="num">$${f.cost_usd.toFixed(5)}</td></tr>`).join("");
-
-  $("#trace-json").textContent = JSON.stringify(D.sample_trace, null, 2);
-
-  /* drift cards */
-  function driftCard(node, title, d, note) {
-    const ok = d.comparable;
-    node.innerHTML = `
-      <h3>${title}</h3>
-      <p style="margin:0 0 12px"><span class="badge ${ok ? "good" : "bad"}">${ok ? "comparable" : "not comparable"}</span></p>
-      <table>
-        <tr><td>composition shift</td><td class="num">${fmt(d.composition_shift, 3)}</td></tr>
-        <tr><td>action mix shift <span class="muted">(description)</span></td><td class="num">${fmt(d.action_mix_shift, 3)}</td></tr>
-        <tr><td>actions with a tested change</td><td class="num">${d.moved_actions ? (d.moved_actions.length ? d.moved_actions.join(", ") : "none") : "—"}</td></tr>
-      </table>
-      <p style="font-size:13px;color:var(--text-secondary);margin:12px 0 0">${note}</p>`;
-  }
-  driftCard($("#drift-mixed"), "Windows cut across task families", D.drift.mixed,
-    "JevBench sweeps family by family, so windowing by count compares different task mixes. The report refuses to read this as deployment drift and says to compare like with like.");
-  driftCard($("#drift-filtered"), "Filtered to one decision node", D.drift.filtered,
-    "Now the windows are samples of the same thing. The raw JS distance is still large — that is small-sample noise — but no action's share change is statistically established, so nothing fires.");
-
-  $("#attribution-table").querySelector("tbody").innerHTML =
-    D.attribution.findings.map((f) => `<tr><td><code>${f.component}</code></td><td>${f.summary}</td></tr>`).join("")
-    || `<tr><td colspan="2" class="muted">no differences recorded</td></tr>`;
-
-  const R = D.repair;
-  $("#repair-sub").innerHTML =
-    `A controlled experiment, because the fault is known in advance: ${R.fault}. Accuracy falls
-     from <strong>${R.baseline_accuracy}</strong> to <strong>${R.broken_accuracy}</strong>, and the
-     cycle is asked to recover it.`;
-  $("#repair-table").querySelector("tbody").innerHTML = R.rows.map((r) => `
-    <tr><td><code>${r.stage}</code></td><td>${r.detail}</td><td class="muted">${r.cost}</td>
-    <td class="num">${r.rejected}</td></tr>`).join("");
-  const v = R.verify;
-  $("#repair-verdict").innerHTML =
-    `<span class="badge good">${v.verdict}</span> &nbsp; holdout n=${v.holdout_n} ·
-     +${v.improvements} −${v.regressions} · ${v.discordant} discordant · p=${v.p_value}
-     <span class="muted">— on traces the generator never saw.</span>`;
-  $("#repair-rationale").textContent = "“" + R.rationale + "”";
-
-  const u = R.underpowered_run;
-  $("#power-card").innerHTML = `
-    <h3>Two tests, because they ask different questions</h3>
-    <p style="margin-top:0;color:var(--text-secondary)">
-      A rerun that split ${u.holdout_n}/${u.holdout_n} had only three flippable items in the
-      holdout. Same items, same candidate, opposite conclusions:
-    </p>
-    <div class="scroll-x"><table>
-      <thead><tr><th>Test</th><th>Asks</th><th class="num">p</th><th>Verdict</th></tr></thead>
-      <tbody>
-        <tr><td>McNemar <span class="muted">(decision)</span></td><td>did behaviour change?</td>
-            <td class="num">${u.decision_p}</td><td><span class="badge warn">${u.decision_verdict}</span></td></tr>
-        <tr><td>Signed-rank <span class="muted">(probability)</span></td><td>did the probability improve?</td>
-            <td class="num">${u.probability_p}</td><td><span class="badge good">${u.probability_verdict}</span></td></tr>
-      </tbody>
-    </table></div>
-    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:0">
-      McNemar can only use items whose decision flipped, so three is below the floor of six
-      and it <em>cannot</em> conclude. The signed-rank test uses all of them and sees a median
-      shift of +${fmt(u.probability_median_delta, 2)} onto the correct label. The strict gate is
-      still the default, and this run approved nothing.
-    </p>`;
-
-  const B = D.batching;
-  $("#batching-card").innerHTML = `
-    <h3>Measuring against a contemporaneous control</h3>
-    <p style="margin-top:0;color:var(--text-secondary)">
-      Putting the baseline and the candidate in one request removes drift and jitter between
-      the arms. That is only sound if questions don't influence each other — verified on the
-      live API over ${B.states} states before relying on it.
-    </p>
-    <div class="tiles" style="margin:12px 0 0">
-      <div class="tile"><div class="k">Contamination</div><div class="v">${fmt(B.contamination_js, 4)}</div><div class="n">vs ${fmt(B.jitter_js, 4)} jitter · identical maxima</div></div>
-      <div class="tile"><div class="k">Cost</div><div class="v">−${B.cost_saving_pct}%</div><div class="n">state encoded once</div></div>
-      <div class="tile"><div class="k">Latency</div><div class="v">−${B.latency_saving_pct}%</div><div class="n">one call, not two</div></div>
-    </div>`;
-
-  /* ---------- charts ---------- */
-  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-
-  function barChart(mount, rows, opts) {
-    const W = 760, rowH = 34, padL = opts.padL || 104, padR = 64, padT = 8;
-    const H = padT + rows.length * rowH + 28;
-    const max = opts.max || Math.max(...rows.map((r) => r.value)) * 1.15 || 1;
-    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opts.aria });
-    const plotW = W - padL - padR;
-
-    for (let i = 0; i <= 4; i++) {
-      const x = padL + (plotW * i) / 4;
-      svg.appendChild(el("line", { x1: x, x2: x, y1: padT, y2: padT + rows.length * rowH, class: "grid-line" }));
-      svg.appendChild(el("text", { x, y: H - 8, class: "axis-text", "text-anchor": "middle" },
-        opts.tickFmt ? opts.tickFmt((max * i) / 4) : fmt((max * i) / 4, 2)));
-    }
-    rows.forEach((r, i) => {
-      const y = padT + i * rowH + 7;
-      const w = Math.max(2, (r.value / max) * plotW);
-      svg.appendChild(el("text", { x: padL - 12, y: y + 13, class: "label-text", "text-anchor": "end" }, r.label));
-      const bar = el("rect", { x: padL, y, width: w, height: 18, rx: 4, fill: css("--series-1") });
-      bindTip(bar, r.tip);
-      svg.appendChild(bar);
-      svg.appendChild(el("text", { x: padL + w + 8, y: y + 13, class: "value-text" }, r.display));
-    });
-    mount.replaceChildren(svg);
-  }
-
+  /* Two phrasings of one question, five repeats each, on a 0-to-1 line. */
   function resampleChart(mount) {
-    const W = 760, H = 220, padL = 132, padR = 40, padT = 30, padB = 42;
+    const W = 760, H = 210, padL = 96, padR = 54, padT = 34, padB = 40;
     const plotW = W - padL - padR;
     const x = (p) => padL + p * plotW;
     const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
-      "aria-label": "P(true) for two phrasings of the same policy question, five repeats each" });
+      "aria-label": "Probability of yes for two phrasings of one question, five repeats each" });
 
-    for (let i = 0; i <= 5; i++) {
-      const p = i / 5, gx = x(p);
-      svg.appendChild(el("line", { x1: gx, x2: gx, y1: padT, y2: H - padB, class: "grid-line" }));
-      svg.appendChild(el("text", { x: gx, y: H - padB + 18, class: "axis-text", "text-anchor": "middle" }, p.toFixed(1)));
-    }
-    svg.appendChild(el("text", { x: padL + plotW / 2, y: H - 6, class: "axis-text", "text-anchor": "middle" }, "P(true)"));
-
+    [0, 0.25, 0.5, 0.75, 1].forEach((p) => {
+      svg.appendChild(el("text", { x: x(p), y: H - padB + 22, class: "axis-text", "text-anchor": "middle" },
+        p.toFixed(2)));
+    });
     const tx = x(0.5);
-    svg.appendChild(el("line", { x1: tx, x2: tx, y1: padT - 14, y2: H - padB, class: "rule" }));
-    svg.appendChild(el("text", { x: tx, y: padT - 19, class: "axis-text", "text-anchor": "middle" }, "decision threshold 0.5"));
+    svg.appendChild(el("line", { x1: tx, x2: tx, y1: padT - 16, y2: H - padB, class: "rule-line" }));
+    svg.appendChild(el("text", { x: tx, y: padT - 22, class: "axis-text", "text-anchor": "middle" },
+      "the line where the answer flips"));
 
-    const colors = [css("--series-1"), css("--series-2")];
-    const names = ["phrasing A", "phrasing B"];
+    const colors = [css("--good"), css("--critical")];
     D.resample.phrasings.forEach((ph, i) => {
-      const y = padT + 34 + i * 62;
+      const y = padT + 22 + i * 64;
       const mean = ph.p_true.reduce((a, b) => a + b, 0) / ph.p_true.length;
       const decided = mean >= 0.5 ? "yes" : "no";
-      const ok = decided === ph.expected;
-
-      svg.appendChild(el("text", { x: padL - 14, y: y + 4, class: "label-text", "text-anchor": "end" }, names[i]));
-      svg.appendChild(el("text", { x: padL - 14, y: y + 20, class: "axis-text", "text-anchor": "end" },
-        `→ ${decided} ${ok ? "✓" : "✗"}`));
-
+      svg.appendChild(el("text", { x: padL - 18, y: y + 4, class: "label-text", "text-anchor": "end" },
+        i === 0 ? "asked one way" : "asked the other way"));
+      svg.appendChild(el("text", { x: padL - 18, y: y + 21, class: "axis-text", "text-anchor": "end" },
+        `answered ${decided}`));
       const lo = Math.min(...ph.p_true), hi = Math.max(...ph.p_true);
-      svg.appendChild(el("line", { x1: x(lo), x2: x(hi), y1: y, y2: y, stroke: colors[i], "stroke-width": 2, "stroke-linecap": "round" }));
-      ph.p_true.forEach((p, j) => {
-        const c = el("circle", { cx: x(p), cy: y, r: 5.5, fill: colors[i], stroke: css("--surface-1"), "stroke-width": 2 });
-        bindTip(c, `${ph.id}<br>repeat ${j + 1} · P(true) = ${p}`);
-        svg.appendChild(c);
+      svg.appendChild(el("line", { x1: x(lo), x2: x(hi), y1: y, y2: y, stroke: colors[i],
+        "stroke-width": 2, "stroke-linecap": "round" }));
+      ph.p_true.forEach((p) => {
+        svg.appendChild(el("circle", { cx: x(p), cy: y, r: 5.5, fill: colors[i],
+          stroke: css("--surface-0"), "stroke-width": 2 }));
       });
-      const lx = x(mean) + (i === 0 ? 18 : -18);
-      svg.appendChild(el("text", { x: lx, y: y + 4, class: "value-text",
+      svg.appendChild(el("text", { x: x(mean) + (i === 0 ? 16 : -16), y: y + 4, class: "value-text",
         "text-anchor": i === 0 ? "start" : "end" }, mean.toFixed(2)));
     });
-
     mount.replaceChildren(svg);
-    $("#legend-resample").innerHTML = D.resample.phrasings.map((ph, i) =>
-      `<span><span class="sw" style="background:${colors[i]}"></span>${names[i]} — “${ph.text.slice(0, 66)}…”</span>`).join("");
   }
 
-  function render() {
-    barChart($("#chart-ece"), D.families.map((f) => ({
-      label: f.family,
-      value: f.ece,
-      display: fmt(f.ece, 3),
-      tip: `<strong>${f.family}</strong><br>ECE ${fmt(f.ece, 4)}<br>accuracy ${fmt(f.accuracy, 3)}<br>mean p ${fmt(f.mean_probability, 3)}<br>n=${f.n}, k=${f.k}`,
-    })), { aria: "Expected calibration error by decision family", tickFmt: (v) => fmt(v, 2) });
+  resampleChart($("#chart-resample"));
+  $("#resample-caption").textContent =
+    "Each phrasing is repeated five times and lands in almost exactly the same place, so this is " +
+    "not the model being random — it is the model reading the two wordings differently, and they " +
+    "fall on opposite sides of the line. Of 72 decisions in this run, one was wrong and one " +
+    "phrasing pair disagreed: the same item. Asking again would never have found it; asking " +
+    "differently did.";
 
-    barChart($("#chart-k"), D.confidence_table.map((r) => ({
-      label: `k = ${r.k}`,
-      value: r.pmax,
-      display: fmt(r.pmax, 3),
-      tip: `<strong>${r.k} options</strong><br>confidence &lt; ${D.confidence_threshold}<br>fires below p_max ${fmt(r.pmax, 3)}`,
-    })), { aria: "Probability corresponding to a fixed confidence threshold, by option count", max: 1, padL: 78, tickFmt: (v) => fmt(v, 1) });
+  $("#k-table").querySelector("tbody").innerHTML = D.confidence_table
+    .map((r) => `<tr><td class="num">${r.k}</td><td class="num">${r.pmax.toFixed(3)}</td></tr>`)
+    .join("");
 
-    resampleChart($("#chart-resample"));
-  }
-
-  syncButton();
-  render();
-  addEventListener("resize", () => { tip.style.opacity = "0"; });
+  $("#trace-json").textContent = JSON.stringify(D.sample_trace, null, 2);
+  $("#provenance").textContent =
+    `Measured against ${D.model} on ${D.overall.n} labelled decisions, at ` +
+    `$${D.overall.cost_per_decision.toFixed(6)} per decision. Regenerated from the stored traces, ` +
+    `so this page cannot drift from the run that produced it.`;
 })();
 </script>
 </body>

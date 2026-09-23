@@ -19,6 +19,7 @@ them would make the page lie:
 from __future__ import annotations
 
 import json
+import re
 import statistics
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
@@ -151,7 +152,8 @@ def _short(value: Any, limit: int = 180) -> str:
             key=lambda kv: -len(str(kv[1])) if isinstance(kv[1], str) else 0,
         )
         text = " · ".join(
-            f"{k}: {v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str)}"
+            f"{_friendly(k)}: "
+            + (_value(v) if isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str))
             for k, v in parts
         )
     else:
@@ -231,7 +233,7 @@ def _check_certainty(traces, unsure_below: float) -> dict:
     if not values:
         return {
             "id": "certainty",
-            "title": "How often the model was unsure",
+            "title": "How often it needed a second look",
             "question": f"How many decisions landed below your {unsure_below:.2f} review line?",
             "status": "unknown",
             "value": "no distributions",
@@ -244,7 +246,7 @@ def _check_certainty(traces, unsure_below: float) -> dict:
     status = "ok" if rate["rate"] < 0.15 else "watch" if rate["rate"] < 0.30 else "problem"
     return {
         "id": "certainty",
-        "title": "How often the model was unsure",
+        "title": "How often it needed a second look",
         "question": f"How many decisions landed below your {unsure_below:.2f} review line?",
         "status": status,
         "value": _pct(rate["rate"]),
@@ -385,7 +387,7 @@ def _plain_signals(report: Mapping[str, Any]) -> list[str]:
         before, after = test["reference"]["rate"], test["current"]["rate"]
         direction = "up from" if after > before else "down from"
         out.append(
-            f"\u201c{action}\u201d is now {_pct(after)} of decisions, {direction} "
+            f"\u201c{_friendly(action)}\u201d is now {_pct(after)} of decisions, {direction} "
             f"{_pct(before)} ({_p(test['p_value'])})"
         )
     certainty = report.get("certainty") or {}
@@ -405,7 +407,7 @@ def _plain_signals(report: Mapping[str, Any]) -> list[str]:
     for question, row in (report.get("adherence") or {}).items():
         if row["changed"]:
             out.append(
-                f"answers on \u201c{question}\u201d stopped fitting the declared options: "
+                f"answers on \u201c{_friendly(question)}\u201d stopped fitting the declared options: "
                 f"{_pct(row['reference']['rate'])} \u2192 {_pct(row['current']['rate'])}"
             )
     return out or list(report["signals"])
@@ -429,12 +431,12 @@ def _plain_finding(finding: Mapping[str, Any]) -> str:
             return f"{field} is now {current[-1]}" + (f" (was {was[-1]})" if was else "")
     if summary.endswith("instructions rewritten"):
         question = evidence.get("question", "this question")
-        return f"the instructions for \u201c{question}\u201d were rewritten"
+        return f"the instructions for \u201c{_friendly(question)}\u201d were rewritten"
     if "criteria reworded" in summary:
         labels = evidence.get("labels") or []
         question = evidence.get("question", "this question")
         return (
-            f"{len(labels)} option descriptions on \u201c{question}\u201d were reworded "
+            f"{len(labels)} option descriptions on \u201c{_friendly(question)}\u201d were reworded "
             "\u2014 the labels themselves are unchanged"
         )
     if "option set changed" in summary:
@@ -515,7 +517,7 @@ def _check_drift(traces, *, window_size: int | None) -> dict:
 
     if drifted_nodes:
         headline = " | ".join(
-            f"{e['node_id']}: " + "; ".join(e["signals"][:2] or ["changed"])
+            f"{_friendly(e['node_id'])}: " + "; ".join(e["signals"][:2] or ["changed"])
             for e in drifted_nodes[:3]
         )
         causes = sorted({c for e in drifted_nodes for c in e["changed_components"]})
@@ -590,10 +592,10 @@ def _check_calibration(traces, *, min_labelled: int = 30) -> dict:
     if total < min_labelled:
         return {
             "id": "calibration",
-            "title": "Stated certainty matches reality",
+            "title": "When it says it is sure, is it right?",
             "question": "When it says it is 80% sure, is it right about 80% of the time?",
             "status": "unknown",
-            "value": f"{total} of ~{min_labelled} needed",
+            "value": f"{total} of ~{min_labelled} results needed",
             "detail": "Calibration needs recorded results to compare against. There are "
             f"{total}; roughly {min_labelled} is the point where the number stops being noise.",
             "advice": "Record more outcomes, then come back to this check.",
@@ -606,18 +608,18 @@ def _check_calibration(traces, *, min_labelled: int = 30) -> dict:
     direction = "over-confident" if mean_p > acc else "under-confident"
     return {
         "id": "calibration",
-        "title": "Stated certainty matches reality",
+        "title": "When it says it is sure, is it right?",
         "question": "When it says it is 80% sure, is it right about 80% of the time?",
         "status": status,
-        "value": f"gap {gap:.3f}",
+        "value": f"off by {gap:.2f}",
         # Two different numbers, and conflating them is how a calibration report
         # gets read as "fine": the headline gap is the average per-bucket error,
         # while the overall lean nets out an over-confident band against an
         # under-confident one and can sit near zero while the gap is large.
-        "detail": f"Across {total} decisions with a recorded result, the typical stated "
-        f"certainty was {mean_p:.2f} and {_pct(acc)} turned out right. Bucket by bucket — "
-        f"which is what the {gap:.3f} gap measures — the stated number was off by that "
-        f"much on average; netted out, it leans {direction} by {abs(mean_p - acc):.2f}.",
+        "detail": f"Across {total} decisions with a recorded result, it said {mean_p:.2f} on "
+        f"average and turned out right {_pct(acc)} of the time. Taking each band of stated "
+        f"probability on its own, the stated number was off by {gap:.2f} on average, and it "
+        f"leans {direction}.",
         "advice": (
             "Certainty can be trusted as a routing signal at this gap. (A gap under 0.1 "
             "passes here, over 0.2 is a problem.)"
@@ -633,6 +635,15 @@ def _check_calibration(traces, *, min_labelled: int = 30) -> dict:
             "verdict_thresholds": {"ok_below": 0.1, "problem_at_or_above": 0.2},
         },
     }
+
+
+LINT_IN_PLAIN = {
+    "too_short": "the instructions may be too short to pin the answer down",
+    "subjective": "the instructions use a word different readers would score differently",
+    "composite_noul": "this yes/no question may be asking two things at once",
+    "no_fallback": "there is no “none of these” option, so the model has to pick something",
+    "duplicate_criteria": "two options are described in the same words",
+}
 
 
 def _check_wording(traces) -> dict:
@@ -656,7 +667,10 @@ def _check_wording(traces) -> dict:
         "question": "Is anything in the schema vague, subjective or double-barrelled?",
         "status": "watch" if warnings else "info",
         "value": f"{len(issues)} flagged",
-        "detail": "; ".join(f"{i['question']}: {i['message']}" for i in issues[:3])
+        "detail": "; ".join(
+            f"{_friendly(i['question'])} — {LINT_IN_PLAIN.get(i['code'], i['message'])}"
+            for i in issues[:3]
+        )
         + ("…" if len(issues) > 3 else ""),
         "advice": "Wording is the cheapest thing to fix and the most common cause of an "
         "unstable decision. Rephrasings of one real request will tell you whether it matters.",
@@ -714,7 +728,8 @@ def _check_config(traces) -> dict:
         "status": "info",
         "value": f"{len(changed)} change(s)",
         "detail": "; ".join(
-            f"{row['node_id']} {row['axis']}: {' → '.join(row['versions'])}" for row in changed[:3]
+            f"{_friendly(row['node_id'])} {row['axis']}: {' → '.join(row['versions'])}"
+            for row in changed[:3]
         )
         + ("…" if len(changed) > 3 else ""),
         "advice": "Not a fault — but any behaviour change in this window has a candidate "
@@ -749,9 +764,9 @@ def _tiles(traces, checks, unsure_below) -> list[dict]:
             "term": "certainty",
         },
         {
-            "label": "Unsure",
+            "label": "Needed a second look",
             "value": _pct(unsure / len(certainties)) if certainties else "—",
-            "note": f"below {unsure_below:.2f} — the human-review pile",
+            "note": f"the model put under {unsure_below:.2f} on its own answer",
             "term": "unsure",
             "tone": next(c["status"] for c in checks if c["id"] == "certainty"),
         },
@@ -1108,6 +1123,16 @@ FLAG_ADVICE = {
 }
 
 
+def _value(text: str) -> str:
+    """A state value as words, when it is an identifier rather than prose.
+
+    States carry both — a customer's message and the label an earlier step chose —
+    and only the second should be rewritten. Anything containing a space is
+    somebody's text and is left exactly as it was written.
+    """
+    return _friendly(text) if re.fullmatch(r"[a-z0-9]+([_-][a-z0-9]+)+", text or "") else text
+
+
 def _split_state(state: Any) -> tuple[str, str]:
     """A state as (the thing a person reads, everything else).
 
@@ -1122,7 +1147,7 @@ def _split_state(state: Any) -> tuple[str, str]:
         return _short(state, 200), ""
     key, primary = max(text_fields, key=lambda kv: len(kv[1]))
     rest = " · ".join(
-        f"{_friendly(k)}: {v if isinstance(v, str) else json.dumps(v, default=str)}"
+        f"{_friendly(k)}: {_value(v) if isinstance(v, str) else json.dumps(v, default=str)}"
         for k, v in state.items()
         if k != key
     )
@@ -1457,7 +1482,7 @@ def _story(checks, drift, comparisons, findings, n_requests: int) -> dict:
         for row in comparisons["pairs"]:
             if row["changed"]:
                 landing[row["after"]["branch"]] = landing.get(row["after"]["branch"], 0) + 1
-        where = ", ".join(f"{k}" for k, _ in sorted(landing.items(), key=lambda kv: -kv[1]))
+        where = ", ".join(_friendly(k) for k, _ in sorted(landing.items(), key=lambda kv: -kv[1]))
         bullets.append(
             {
                 "label": "What it did to requests",
@@ -1470,7 +1495,7 @@ def _story(checks, drift, comparisons, findings, n_requests: int) -> dict:
 
     return {
         "kind": "incident",
-        "headline": f"{node['node_id']} started answering differently",
+        "headline": f"The {_friendly(node['node_id'])} step started answering differently",
         "when": node["current_from"],
         "node_id": node["node_id"],
         "bullets": bullets,
@@ -1605,7 +1630,6 @@ def build_report(
     problems = [c for c in checks if c["status"] == "problem"]
     watches = [c for c in checks if c["status"] == "watch"]
     status = "problem" if problems else "watch" if watches else "ok"
-    score = max(0, 100 - 25 * len(problems) - 8 * len(watches))
 
     if problems:
         noun = "thing needs" if len(problems) == 1 else "things need"
@@ -1644,7 +1668,12 @@ def build_report(
     # distance, which is a description and not a test, and on a small window it
     # is large whatever the deployment is doing. What fires is in the drift check.
     findings = [
-        {**f, "node_id": node["node_id"], "behaviour_moved": node["drifted"]}
+        {
+            **f,
+            "plain": _plain_finding(f),
+            "node_id": node["node_id"],
+            "behaviour_moved": node["drifted"],
+        }
         for node in drift["evidence"].get("nodes", [])
         for f in node["findings"]
         if f["component"] != "behaviour"
@@ -1667,7 +1696,6 @@ def build_report(
         },
         "headline": {
             "status": status,
-            "score": score,
             "summary": summary,
             "unknown": [c["title"] for c in unknowns],
         },

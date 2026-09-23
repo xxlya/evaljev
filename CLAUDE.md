@@ -93,12 +93,17 @@ Breaking these silently undoes the point of the library.
    answer as a schema failure; with no `labels` argument it now derives each trace's
    own. And an ordinal policy of `int(expected_value)` can pick a level the model gave
    no probability to — use `answer_branch`, which is the argmax.
-9. **A count without its denominator is not a number.** Every figure on the console
-   carries what it is a share of, and node-level certainty is shown as before → after
-   rather than as a level. A bare "0.86" cannot be read by anyone.
+9. **A count without its denominator is not a number, and a metric nobody can read is
+   not worth page space.** Every figure carries what it is a share of. Metrics were
+   audited by "what decision does this change": ECE as a number, JS distance,
+   composition shift, the test names (McNemar, Fisher, signed-rank, Wilson), the
+   JevBench family table, the repair funnel and the batching measurements are all gone
+   from the pages — several remain in the library and in the evidence JSON, which is
+   where a reader who wants them will look. `docs/how-it-works.html` is now five rules,
+   three self-imposed constraints, and a section on what the tool cannot see.
 10. **The dashboard never renders "unknown" as healthy.** A check with too little
-   evidence reports `unknown`, is excluded from the score, and is listed under the
-   verdict. `report.py` translates; it computes nothing of its own — every number on
+   evidence reports `unknown` and is listed under the verdict. (There was a 0–100
+   health score; it was an invented formula that changed no decision, so it is gone.) `report.py` translates; it computes nothing of its own — every number on
    the page comes from a library function, and no prose on it is model-written. The
    narrative at the top (`_story`) is assembled in `report.py`, not in JavaScript, so
    the claims it makes are testable.

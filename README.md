@@ -550,10 +550,17 @@ recent decisions with their probability spread.
 | Wording | Is anything in the schema vague, subjective or double-barrelled? |
 | Configuration | Did the model, wording, options or policy change mid-stream? |
 
+Every metric on either page had to answer "what decision does this change, and can
+someone who did not build it read it?". The ones that could not are gone from the pages
+and remain in the library for whoever wants them: expected calibration error as a number,
+Jensen-Shannon distances, composition shift, the names of the statistical tests, and a
+0–100 health score that was an invented formula. `docs/how-it-works.html` is now the five
+flag rules, three self-imposed constraints, and a section on what the tool cannot see.
+
 Four properties are deliberate, because they are what make either view worth trusting:
 
 - **"Not measured" never renders as "healthy".** A check with too little evidence says
-  so and is left out of the score — [too little evidence means nothing was shown](#rates-carry-intervals-comparisons-carry-verdicts).
+  so — [too little evidence means nothing was shown](#rates-carry-intervals-comparisons-carry-verdicts).
 - **Every rate carries its interval.** 1 flip in 36 appears as 2.8% *with* its 0.5–14.2% range.
 - **Nothing on either page is written by a model.** Every number is computed by the library
   from the traces; the prose is fixed text chosen by the verdict.
