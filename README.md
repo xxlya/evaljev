@@ -1,23 +1,5 @@
 # EvalJev
 
-**Runtime assurance for Jev / System-One decision workflows.**
-
-EvalJev instruments typed probabilistic decisions, links them to downstream outcomes, detects calibration and stability failures, replays production traces against candidate changes, and provides the primitives needed for safe auto-repair.
-
-> Jev makes decisions fast. EvalJev helps you know when those decisions — and the workflow around them — are reliable.
-
-**Live run audit: <https://xxlya.github.io/evaljev/>** — every change you shipped to a Jev
-workflow, what it did to real requests, and whether to keep it. A three-step support assistant, 351 real
-decisions, and the question edit that quietly started routing customers to a human. Point
-it at your own traces and you get the same screen:
-
-```bash
-pip install "git+https://github.com/xxlya/evaljev"
-evaljev console traces.jsonl --open
-```
-
-# EvalJev
-
 **Know whether your Jev agent is still deciding well — and which change broke it.**
 
 A Jev workflow makes typed decisions: state in, a probability over your options out, your
