@@ -912,12 +912,25 @@ def _trajectory(request_id: str, rows: Sequence[DecisionTrace], unsure_below: fl
     }
 
 
-def _workflow_path(traces, groups, drift=None) -> list[dict]:
-    """The decision points in the order a request meets them, with their trend.
+def _question_kind(question, labels: Mapping[str, Sequence[str]]) -> str:
+    """What this step asks, in a phrase rather than a type name."""
+    if question is None:
+        return "asks the model something"
+    options = labels.get(question.question_name if hasattr(question, "question_name") else "")
+    if question.type == "noul":
+        return "answers yes or no"
+    if question.type == "score":
+        return f"rates 0 to {len(options) - 1}" if options else "rates a level"
+    return f"picks one of {len(options)} options" if options else "picks one option"
 
-    A bare "typical certainty 0.86" is unreadable — high or low against what? Where
-    the drift check has a history for the node, the number is carried as a pair so
-    the strip can show the move rather than the level.
+
+def _workflow_path(traces, groups, drift, unsure_below: float, labels) -> list[dict]:
+    """The decision points in the order a request meets them, each with a verdict.
+
+    Written as a sentence per step, not as metrics. "typical certainty 0.98 → 0.83"
+    is only legible to someone who already knows what certainty is and what a good
+    one looks like; "18% of answers here now need a second look, up from 4%" is the
+    same fact in units anyone can act on.
     """
     position: dict[str, list[int]] = {}
     for rows in groups.values():
@@ -934,34 +947,61 @@ def _workflow_path(traces, groups, drift=None) -> list[dict]:
         first = min(t.timestamp for t in by_node[node])
         return (1, first.timestamp(), node)
 
-    series_by_node = {
+    entries = {
         entry["node_id"]: entry
         for entry in ((drift or {}).get("evidence", {}) or {}).get("nodes", [])
     }
+
+    def unsure_share(rows: Sequence[DecisionTrace]) -> float | None:
+        values = [c for c in (_decision_certainty(t) for t in rows) if c is not None]
+        return sum(1 for c in values if c < unsure_below) / len(values) if values else None
+
     path = []
     for node in sorted(by_node, key=order):
         rows = by_node[node]
-        entry = series_by_node.get(node)
+        entry = entries.get(node)
         before = after = None
-        if entry and len(entry["series"]) > 1:
-            earlier = [w["mean_certainty"] for w in entry["series"][:-1] if w["mean_certainty"]]
-            before = statistics.mean(earlier) if earlier else None
-            after = entry["series"][-1]["mean_certainty"]
-        certainties = [c for c in (_decision_certainty(t) for t in rows) if c is not None]
+        if entry:
+            current = set(entry["current_trace_ids"])
+            after = unsure_share([t for t in rows if t.trace_id in current])
+            before = unsure_share([t for t in rows if t.trace_id not in current])
+
+        overall = unsure_share(rows)
+        drifted = bool(entry and entry["drifted"])
+        if drifted and before is not None and after is not None:
+            direction = "up from" if after >= before else "down from"
+            summary = (
+                f"Started answering differently partway through. {_pct(after)} of its "
+                f"answers now need a second look, {direction} {_pct(before)}."
+            )
+        elif overall:
+            summary = f"Steady. {_pct(overall)} of its answers need a second look."
+        else:
+            summary = "Steady. Every answer here was clear enough to act on."
+
         answer = rows[-1].answers[0] if rows[-1].answers else None
         path.append(
             {
                 "node_id": node,
                 "question": answer.question_name if answer else None,
                 "type": answer.type if answer else None,
+                "kind": _question_kind(answer, labels),
                 "n": len(rows),
-                "median_certainty": statistics.median(certainties) if certainties else None,
+                "summary": summary,
+                "drifted": drifted,
+                "unsure_before": before,
+                "unsure_after": after,
+                "unsure_rate": overall,
+                "median_certainty": (
+                    statistics.median(
+                        [c for c in (_decision_certainty(t) for t in rows) if c is not None]
+                    )
+                    if any(_decision_certainty(t) is not None for t in rows)
+                    else None
+                ),
                 "top_action": (
                     max(action_mix(rows).items(), key=lambda kv: kv[1])[0] if rows else None
                 ),
-                "certainty_before": before,
-                "certainty_after": after,
-                "drifted": bool(entry and entry["drifted"]),
             }
         )
     return path
@@ -1654,7 +1694,7 @@ def build_report(
         "attribution": findings,
         "story": _story(checks, drift, comparisons, findings, len(groups)),
         "queue": queue,
-        "workflow": _workflow_path(rows, groups, drift),
+        "workflow": _workflow_path(rows, groups, drift, unsure_below, labels),
         "trajectories": _select_trajectories(trajectories),
         "comparisons": comparisons,
         "decisions": _decision_rows(rows, limit=recent, unsure_below=unsure_below),
