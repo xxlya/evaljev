@@ -143,9 +143,8 @@ hand-edit `index.html`:
   which of them matters and why. And **no identifier is printed in snake_case**:
   `classify_request` reads as "classify request" everywhere, with the exact id kept in
   a `title`. Both pages run the same `words()` helper for that.
-- `docs/report.html` — the full analysis, same report dict, `--view report`.
 - `docs/how-it-works.html` — the essay page, reading `docs/data.js` (JevBench).
-- `docs/incident.html` — a redirect to `report.html`, kept so an earlier link works.
+- `docs/incident.html` — a redirect to the console, kept so an earlier link works.
 
 Both views render from one `build_report()` dict through `render_html(report, view)`
 (`VIEWS` in `report.py`), so they cannot disagree about a number. The queue lives in

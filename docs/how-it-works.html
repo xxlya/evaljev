@@ -126,12 +126,6 @@
   .value-text { fill: var(--text-primary); font-size: 12.5px; font-weight: 600; }
   .rule-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 4 3; }
 
-  table { border-collapse: collapse; font-size: 14px; margin-top: 18px; }
-  th, td { text-align: left; padding: 7px 26px 7px 0; border-bottom: 1px solid var(--border); }
-  th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
-       color: var(--text-muted); font-weight: 500; }
-  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-
   code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
   pre { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
         overflow-x: auto; font-size: 12.5px; line-height: 1.6; font-family: var(--mono); }
@@ -152,7 +146,6 @@
     <span class="mark">Eval<b>Jev</b></span>
     <span class="spacer"></span>
     <a class="ghost" href="./">Console</a>
-    <a class="ghost" href="report.html">Full report</a>
     <a class="ghost" href="https://github.com/xxlya/evaljev">GitHub</a>
   </div>
 </div>
@@ -195,8 +188,9 @@
     <div class="rule">
       <div class="what"><span class="dot" style="background:var(--critical)"></span>The model was unsure</div>
       <p class="how">It put less probability on its answer than your review line — 0.60 by default,
-        and your number to set. Not the API’s <code>confidence</code> field; see below.
-        <b>Needs no ground truth.</b></p>
+        and your number to set. The probability itself, not the API’s <code>confidence</code>
+        field, which is a margin over an even split and so means something different for
+        every question depending on how many options it has. <b>Needs no ground truth.</b></p>
     </div>
     <div class="rule">
       <div class="what"><span class="dot" style="background:var(--warning)"></span>The step had just changed</div>
@@ -222,7 +216,7 @@
     <div class="rule">
       <div class="what">“Not measured” never reads as “fine”</div>
       <p class="how">Too little evidence means nothing was shown, which is not the same as nothing
-        being wrong. Those checks say so and are left out of the score.</p>
+        being wrong. Those checks say so, and nothing is claimed from them.</p>
     </div>
     <div class="rule">
       <div class="what">A change has to clear a test</div>
@@ -243,52 +237,6 @@
     <div id="chart-resample"></div>
     <figcaption id="resample-caption"></figcaption>
   </figure>
-</section>
-
-<section>
-  <h2>One trap worth knowing</h2>
-  <p>
-    Jev returns a <code>confidence</code> field, and it is <strong>not a probability</strong>. It is a
-    margin over an even split, so the same threshold means a different thing for every question
-    depending on how many options it has. A cutoff of <code>confidence &lt; 0.55</code> fires here:
-  </p>
-  <table id="k-table">
-    <thead><tr><th>Options in the question</th><th>…which is really a probability of</th></tr></thead>
-    <tbody></tbody>
-  </table>
-  <p style="margin-top:18px">
-    Add one option to a question and every threshold keyed on confidence moves, with no model
-    change and no code change. EvalJev thresholds on the probability itself, and flags an option-set
-    change as its own finding for exactly this reason.
-  </p>
-</section>
-
-<section>
-  <h2>What it cannot see</h2>
-  <p class="sub">The part usually left off a page like this.</p>
-  <div class="rules">
-    <div class="rule">
-      <div class="what">Whether your inputs still mean the same thing</div>
-      <p class="how">It compares the <em>shape</em> of the inputs — which fields are there, how big they
-        are. A clean result is not evidence your traffic is unchanged; the same fields can carry
-        completely different requests.</p>
-    </div>
-    <div class="rule">
-      <div class="what">Whether your options are the right options</div>
-      <p class="how">It can tell you the model is hesitating between two of them. It cannot tell you
-        the two should have been one, or that a third is missing.</p>
-    </div>
-    <div class="rule">
-      <div class="what">Anything before you started recording</div>
-      <p class="how">Every comparison is against the history in the file you pass it. A workflow that
-        was already broken when recording started looks steady.</p>
-    </div>
-    <div class="rule">
-      <div class="what">Whether an unreviewed decision was right</div>
-      <p class="how">Accuracy only exists where you recorded an outcome. If outcomes only come back
-        for the requests a person looked at, that number is review accuracy, not workflow accuracy.</p>
-    </div>
-  </div>
 </section>
 
 <section>
@@ -382,10 +330,6 @@ evaljev console traces.jsonl --open</code></pre>
     "fall on opposite sides of the line. Of 72 decisions in this run, one was wrong and one " +
     "phrasing pair disagreed: the same item. Asking again would never have found it; asking " +
     "differently did.";
-
-  $("#k-table").querySelector("tbody").innerHTML = D.confidence_table
-    .map((r) => `<tr><td class="num">${r.k}</td><td class="num">${r.pmax.toFixed(3)}</td></tr>`)
-    .join("");
 
   $("#trace-json").textContent = JSON.stringify(D.sample_trace, null, 2);
   $("#provenance").textContent =

@@ -174,7 +174,10 @@ def test_report_is_json_serializable_and_renders_without_the_placeholder():
 
 
 def test_html_escapes_a_closing_script_tag_in_the_data():
-    rows = [trace(minutes=i, state={"text": "</script><b>x"}) for i in range(4)]
+    rows = [
+        trace(minutes=i, state={"text": "</script><b>x"}, probs={"refund": 0.4, "status": 0.35, "other": 0.25})
+        for i in range(4)
+    ]
     html = render_html(build_report(rows))
     assert "</script><b>x" not in html
     assert "<\\/script>" in html
@@ -366,12 +369,14 @@ def test_clean_requests_are_counted_but_not_queued():
     assert queue["rows"] == []
 
 
-def test_the_console_and_the_report_render_from_the_same_data():
+def test_the_page_carries_only_what_it_renders():
+    """The analysis stays in the report; the page ships the four keys it reads."""
     report = build_report(workflow_traces(n=24))
-    console, full = render_html(report, "console"), render_html(report, "report")
-    assert "__EVALJEV_REPORT__" not in console
-    # Assert on structure, not on copy: the wording of either page is free to change.
-    assert 'id="rows"' in console and 'id="focus"' in console      # the triage view
-    assert 'id="check-list"' in full and 'id="chart-volume"' in full  # the analysis view
-    with pytest.raises(ValueError):
-        render_html(report, "nope")
+    page = render_html(report)
+    assert "__EVALJEV_REPORT__" not in page
+    assert 'id="rows"' in page and 'id="focus"' in page
+    assert '"queue"' in page and '"workflow"' in page
+    # Panels the console does not draw are not embedded in it.
+    assert '"selective_risk"' not in page
+    assert '"reliability"' not in page
+    assert '"decisions"' not in page

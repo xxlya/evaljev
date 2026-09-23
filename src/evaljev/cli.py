@@ -4,9 +4,11 @@ Three commands, and the whole point is that none of them need a service, a key o
 a network call:
 
     evaljev console traces.jsonl                 # what needs a person, and where it was flagged
-    evaljev report traces.jsonl -o report.html   # the full analysis behind it
-    evaljev serve traces.jsonl                   # the console, refreshing as traffic arrives
-    evaljev demo                                 # either view, on a real recorded run
+    evaljev serve traces.jsonl                   # the same page, refreshing as traffic arrives
+    evaljev demo                                 # the page, on a real recorded run
+
+Everything the console does not show is still in the report it is built from:
+``--json report.json`` writes the whole thing.
 """
 
 from __future__ import annotations
@@ -75,9 +77,9 @@ def _report_kwargs(args) -> dict:
     }
 
 
-def _write(report, out: Path, json_path: str | None, view: str = "console") -> None:
+def _write(report, out: Path, json_path: str | None) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_html(report, view), encoding="utf-8")
+    out.write_text(render_html(report), encoding="utf-8")
     if json_path:
         Path(json_path).write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
 
@@ -93,7 +95,7 @@ def _summarize(report, out: Path) -> None:
 def cmd_report(args) -> int:
     report = build_report(_load(args.paths), **_report_kwargs(args))
     out = Path(args.output)
-    _write(report, out, args.json, args.view)
+    _write(report, out, args.json)
     _summarize(report, out)
     if args.open:
         webbrowser.open(out.resolve().as_uri())
@@ -111,7 +113,7 @@ def cmd_demo(args) -> int:
         human_actions=_report_kwargs(args)["human_actions"],
     )
     out = Path(args.output)
-    _write(report, out, args.json, args.view)
+    _write(report, out, args.json)
     _summarize(report, out)
     if args.open:
         webbrowser.open(out.resolve().as_uri())
@@ -121,8 +123,8 @@ def cmd_demo(args) -> int:
 class _Handler(BaseHTTPRequestHandler):
     """Rebuilds the report per request, so the page tracks the file as it grows."""
 
-    def __init__(self, *a, paths, kwargs, view="console", **kw):
-        self._paths, self._kwargs, self._view = paths, kwargs, view
+    def __init__(self, *a, paths, kwargs, **kw):
+        self._paths, self._kwargs = paths, kwargs
         super().__init__(*a, **kw)
 
     def _send(self, body: bytes, content_type: str) -> None:
@@ -141,9 +143,7 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path.startswith("/report.json"):
                 self._send(json.dumps(self._build(), default=str).encode(), "application/json")
             elif self.path in ("/", "/index.html"):
-                self._send(render_html(self._build(), self._view).encode(), "text/html; charset=utf-8")
-            elif self.path in ("/report", "/report.html"):
-                self._send(render_html(self._build(), "report").encode(), "text/html; charset=utf-8")
+                self._send(render_html(self._build()).encode(), "text/html; charset=utf-8")
             else:
                 self.send_error(404)
         except SystemExit as exc:  # an empty or missing file, mid-run
@@ -159,12 +159,11 @@ def cmd_serve(args) -> int:
     kwargs = _report_kwargs(args)
     kwargs["live_interval_ms"] = int(args.refresh * 1000)
     _load(args.paths)  # fail fast, before binding the port
-    handler = partial(_Handler, paths=args.paths, kwargs=kwargs, view=args.view)
+    handler = partial(_Handler, paths=args.paths, kwargs=kwargs)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     url = f"http://{'localhost' if args.host in ('', '0.0.0.0') else args.host}:{args.port}/"
     print(f"EvalJev dashboard on {url}")
     print(f"  reading {', '.join(args.paths)} · refreshing every {args.refresh:g}s · ctrl-c to stop")
-    print(f"  {url}report for the full analysis")
     if args.open:
         webbrowser.open(url)
     try:
@@ -204,13 +203,6 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument("--json", metavar="FILE", help="also write the report as JSON")
     p.add_argument("--open", action="store_true", help="open the page in a browser")
-    p.add_argument(
-        "--view",
-        choices=["console", "report"],
-        default="console",
-        help="console: what needs a person and where it was flagged (default). "
-        "report: the full analysis behind it.",
-    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -229,15 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     console.add_argument("-o", "--output", default="console.html", metavar="FILE",
                          help="where to write the page (default: console.html)")
     _add_common(console)
-    console.set_defaults(func=cmd_report, view="console")
-
-    report = sub.add_parser("report", help="the full analysis behind the console")
-    report.add_argument("paths", nargs="*", default=[DEFAULT_TRACES], metavar="TRACES",
-                        help=f"one or more .jsonl trace files (default: {DEFAULT_TRACES})")
-    report.add_argument("-o", "--output", default="report.html", metavar="FILE",
-                        help="where to write the page (default: report.html)")
-    _add_common(report)
-    report.set_defaults(func=cmd_report, view="report")
+    console.set_defaults(func=cmd_report)
 
     serve = sub.add_parser("serve", help="serve the page locally and refresh it as traces arrive")
     serve.add_argument("paths", nargs="*", default=[DEFAULT_TRACES], metavar="TRACES")

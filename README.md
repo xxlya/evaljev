@@ -39,7 +39,7 @@ Failures can come from the model, question schema, state construction, threshold
 - **Failure attribution**: diff two windows of traffic and name the component that changed — schema, option set, policy, model, or inputs.
 - **Repair proposal**: generate candidate schemas from observed failures, then gate them on a held-out replay against a contemporaneous control. Proposes; never applies.
 - **Spend ceilings**: a per-API USD cap that refuses the call which would breach it, so an evaluation loop cannot drain an account.
-- **Decision console**: one self-contained HTML file — which requests need a person, why, and the path through your workflow where each was flagged. Built from a trace file by `evaljev console`, with no service, no key and no network call. `evaljev report` renders the full analysis behind it.
+- **Decision console**: one self-contained HTML file — which decisions your workflow made alone that it should not have, why, and the path through your workflow where each was flagged. Built from a trace file by `evaljev console`, with no service, no key and no network call; `--json` writes the whole analysis behind it.
 - **Claude/Gemini example**: Jev routes work to Claude, Gemini, or both; EvalJev records the decision path.
 
 ## Install
@@ -485,8 +485,7 @@ pip install "git+https://github.com/xxlya/evaljev"   # not on PyPI yet
 
 evaljev console traces.jsonl --open   # the triage screen
 evaljev serve traces.jsonl            # the same screen, re-reading the file as traffic arrives
-evaljev report traces.jsonl           # the full analysis behind it
-evaljev demo                          # either view, on the recorded example run
+evaljev demo                          # the screen, on the recorded example run
 ```
 
 Live example: **<https://xxlya.github.io/evaljev/>**
@@ -533,60 +532,44 @@ Give it `metadata={"request_id": ...}` at every `Monitor.run` in a request and i
 whole requests with their path. Without one it triages each decision on its own and says
 so — a missing path is not a missing console.
 
-## The full report
+## What is behind it
 
-`evaljev report` is the diagnosis behind the console: eight checks in plain language, what
-changed and when, the same input before and after, certainty and drift over time, and the
-recent decisions with their probability spread.
+The console shows one screen. Everything else `build_report()` computes — eight health
+checks, calibration, drift windows, the attribution diff, per-decision rows — is written
+by `--json` and is the interface for anything else you want to do with it, including a CI
+assertion:
 
-| Check | The question, as asked on the page |
-| --- | --- |
-| Valid answers | Did every answer use your labels, with probabilities adding up to 1? |
-| Certainty | How many decisions landed below your review line? |
-| Drift | Has anything started answering differently than it used to? |
-| Consistency | When the identical input came in twice, did it decide the same way? |
-| Calibration | When it says it is 80% sure, is it right about 80% of the time? |
-| Outcomes | Do you know how these decisions actually turned out? |
-| Wording | Is anything in the schema vague, subjective or double-barrelled? |
-| Configuration | Did the model, wording, options or policy change mid-stream? |
+```python
+from evaljev import JsonlTraceStore, build_report
 
-Every metric on either page had to answer "what decision does this change, and can
-someone who did not build it read it?". The ones that could not are gone from the pages
-and remain in the library for whoever wants them: expected calibration error as a number,
-Jensen-Shannon distances, composition shift, the names of the statistical tests, and a
-0–100 health score that was an invented formula. `docs/how-it-works.html` is now the five
-flag rules, three self-imposed constraints, and a section on what the tool cannot see.
+report = build_report(JsonlTraceStore("traces.jsonl").list(), unsure_below=0.6)
+assert report["queue"]["counts"]["acted_alone"] == 0, report["queue"]["headline"]
+```
 
-Four properties are deliberate, because they are what make either view worth trusting:
+Every metric had to answer "what decision does this change, and can someone who did not
+build it read it?". The ones that could not are absent from the page and remain in that
+JSON: expected calibration error as a number, Jensen-Shannon distances, composition shift,
+the names of the statistical tests, and a 0–100 health score that was an invented formula.
+
+Four properties are deliberate, because they are what make the screen worth trusting:
 
 - **"Not measured" never renders as "healthy".** A check with too little evidence says
   so — [too little evidence means nothing was shown](#rates-carry-intervals-comparisons-carry-verdicts).
 - **Every rate carries its interval.** 1 flip in 36 appears as 2.8% *with* its 0.5–14.2% range.
-- **Nothing on either page is written by a model.** Every number is computed by the library
+- **Nothing on the page is written by a model.** Every number is computed by the library
   from the traces; the prose is fixed text chosen by the verdict.
 - **Nothing leaves your machine.** One HTML file, no CDN, no telemetry, no account.
 
-Useful flags (every command accepts them):
+Useful flags:
 
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--unsure-below P` | `0.6` | the review line: probability under which a decision needs a person. A probability, never `confidence` — see [below](#confidence-is-a-margin-not-a-probability) |
 | `--human-actions A,B` | matched by name | the branches that mean a person is now involved |
-| `--view console\|report` | per command | which screen to render |
 | `--workflow ID` | all | restrict to one `workflow_id` |
 | `--window N` | a quarter of each node's traffic | decisions per drift-comparison window |
-| `--json FILE` | — | also write the report as JSON, for a CI check or your own renderer |
+| `--json FILE` | — | write the whole analysis as JSON |
 | `--open` | off | open the page in a browser |
-
-From Python, for a custom renderer or an assertion in CI:
-
-```python
-from evaljev import JsonlTraceStore, build_report, render_html
-
-report = build_report(JsonlTraceStore("traces.jsonl").list(), unsure_below=0.6)
-assert report["queue"]["counts"]["acted_alone"] == 0, report["queue"]["headline"]
-Path("console.html").write_text(render_html(report, "console"))
-```
 
 ## The example workflow
 
@@ -625,7 +608,7 @@ to configure. Two pages: the dashboard for the example workflow (`index.html`) a
 evidence behind the library (`how-it-works.html`).
 
 ```bash
-python benchmarks/export_demo_data.py   # regenerates both pages from the recorded traces
+python benchmarks/export_demo_data.py   # regenerates the pages from the recorded traces
 python -m http.server -d docs 8765      # preview at http://localhost:8765
 ```
 

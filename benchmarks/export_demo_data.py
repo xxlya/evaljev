@@ -6,7 +6,6 @@ Two generated pages plus one data file, all computed by the library itself:
   (``examples/support_assistant.py``): which requests need a person, and where in
   the workflow they were flagged. Exactly what ``evaljev console`` writes for
   anyone else's traces.
-- ``docs/report.html`` — the full analysis behind it, from the same report dict.
 - ``docs/incident.html`` — a redirect, kept so an already-shared link still lands
   somewhere useful.
 - ``docs/data.js`` — the measurements the "how it works" page walks through, from
@@ -43,16 +42,9 @@ REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = "jevbench"
 OUT = REPO / "docs" / "data.js"
 CONSOLE = REPO / "docs" / "index.html"
-FULL_REPORT = REPO / "docs" / "report.html"
 REDIRECT = REPO / "docs" / "incident.html"
 
 CONSOLE_LINKS = [
-    {"label": "Full report", "href": "report.html"},
-    {"label": "How it works", "href": "how-it-works.html"},
-    {"label": "GitHub", "href": "https://github.com/xxlya/evaljev"},
-]
-REPORT_LINKS = [
-    {"label": "Console", "href": "./"},
     {"label": "How it works", "href": "how-it-works.html"},
     {"label": "GitHub", "href": "https://github.com/xxlya/evaljev"},
 ]
@@ -70,12 +62,12 @@ REDIRECT_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <title>Moved — EvalJev</title>
-<meta http-equiv="refresh" content="0; url=./report.html">
-<link rel="canonical" href="./report.html">
+<meta http-equiv="refresh" content="0; url=./">
+<link rel="canonical" href="./">
 </head>
 <body>
-<p>The caught-failure walkthrough is part of the full report now.
-<a href="./report.html">Continue &rarr;</a></p>
+<p>That page is gone; the console is here.
+<a href="./">Continue &rarr;</a></p>
 </body>
 </html>
 """
@@ -161,29 +153,17 @@ def load_support() -> list:
 
 
 def write_pages() -> None:
-    """Render both published views through the code path anyone else gets."""
-    traces = load_support()
+    """Render the published console through the code path anyone else gets."""
     console = build_report(
-        traces,
+        load_support(),
         title="Support assistant",
         links=CONSOLE_LINKS,
         note=DEMO_NOTE,
     )
-    CONSOLE.write_text(render_html(console, "console"), encoding="utf-8")
-
-    full = build_report(
-        traces,
-        title="Support assistant — decision health",
-        links=REPORT_LINKS,
-        note=DEMO_NOTE + " This is the full analysis behind the console.",
-    )
-    FULL_REPORT.write_text(render_html(full, "report"), encoding="utf-8")
+    CONSOLE.write_text(render_html(console), encoding="utf-8")
     REDIRECT.write_text(REDIRECT_HTML, encoding="utf-8")
-
-    queue = console["queue"]
     print(f"wrote {CONSOLE} ({CONSOLE.stat().st_size // 1024} KB)")
-    print(f"  {queue['headline']}")
-    print(f"wrote {FULL_REPORT} ({FULL_REPORT.stat().st_size // 1024} KB)")
+    print(f"  {console['queue']['headline']}")
 
 
 def main() -> int:

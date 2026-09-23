@@ -1730,29 +1730,28 @@ def build_report(
     }
 
 
-VIEWS = {"console": "assets/console.html", "report": "assets/dashboard.html"}
+#: What the page reads. Everything else `build_report` computes stays available
+#: through `--json`, which is the interface for anyone who wants the rest — there
+#: is no reason to ship 200 KB of unread JSON inside an HTML file.
+PAGE_KEYS = ("meta", "story", "queue", "workflow")
 
 
-def render_html(report: Mapping[str, Any], view: str = "console") -> str:
-    """Render a report as one self-contained HTML page — no network, no build step.
-
-    ``console`` is the operational view: which requests need a person, and where in
-    the workflow they were flagged. ``report`` is the full analysis behind it. Both
-    read the same report dict, so the two can never disagree about a number.
-    """
+def render_html(report: Mapping[str, Any]) -> str:
+    """Render the console as one self-contained HTML page — no network, no build step."""
     from importlib import resources
 
-    if view not in VIEWS:
-        raise ValueError(f"unknown view {view!r}; expected one of {sorted(VIEWS)}")
-    template = resources.files("evaljev").joinpath(VIEWS[view]).read_text(encoding="utf-8")
-    payload = json.dumps(report, default=str).replace("</", "<\\/")
+    template = (
+        resources.files("evaljev").joinpath("assets/console.html").read_text(encoding="utf-8")
+    )
+    page = {k: report[k] for k in PAGE_KEYS if k in report}
+    payload = json.dumps(page, default=str).replace("</", "<\\/")
     return template.replace('"__EVALJEV_REPORT__"', payload)
 
 
-def write_report(report: Mapping[str, Any], path, view: str = "console") -> Any:
+def write_report(report: Mapping[str, Any], path) -> Any:
     from pathlib import Path
 
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_html(report, view), encoding="utf-8")
+    out.write_text(render_html(report), encoding="utf-8")
     return out

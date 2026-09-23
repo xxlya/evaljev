@@ -428,10 +428,6 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
   }
 
   function renderFlow() {
-    const byNode = D.queue.by_node || {};
-    const changed = new Set(
-      (D.checks.find((c) => c.id === "drift")?.evidence?.nodes || [])
-        .filter((n) => n.drifted).map((n) => n.node_id));
     $("#program").innerHTML = D.workflow.map((n, i) => `
       ${i ? '<div class="link">\u2192</div>' : ""}
       <div class="stage ${n.drifted ? "changed" : ""}">
