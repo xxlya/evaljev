@@ -61,6 +61,7 @@ from .stats import (
 )
 from .store import InMemoryTraceStore, JsonlTraceStore
 from .thresholds import optimize_binary_threshold
+from .watch import WatchedClient, watch
 
 __all__ = [
     "BudgetExceeded",
@@ -77,6 +78,7 @@ __all__ = [
     "QuestionSpec",
     "ReplayResult",
     "SpendBudget",
+    "WatchedClient",
     "Window",
     "action_mix",
     "answer_branch",
@@ -127,6 +129,7 @@ __all__ = [
     "validate_candidate",
     "vendor_drift_check",
     "version_diff",
+    "watch",
     "wilcoxon_signed_rank",
     "wilson_interval",
     "window_metrics",

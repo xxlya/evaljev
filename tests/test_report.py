@@ -450,3 +450,10 @@ def test_declared_runs_win_over_inferred_ones():
     runs = build_report(rows)["runs"]
     assert len(runs) == 1                              # the caller said it was one run
     assert runs[0]["verdict"] == "baseline"
+
+
+def test_a_run_is_named_after_the_version_that_changed():
+    """Regression: the label matched a display string, never the raw node id."""
+    runs = build_report(workflow_traces(n=48, broken_from=24))["runs"]
+    assert runs[0]["label"] == "v2"
+    assert runs[0]["changes"][0]["nodes"] == ["classify"]

@@ -196,6 +196,8 @@
   footer { border-top: 1px solid var(--border); margin-top: 56px; padding: 28px 0 64px;
            color: var(--text-secondary); font-size: 13.5px; }
   footer a { color: var(--text-primary); }
+  footer .steps { margin: 12px 0 16px; padding-left: 20px; }
+  footer .steps li { margin-bottom: 7px; line-height: 1.55; }
   footer .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
   pre { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
         overflow-x: auto; font-size: 12.5px; line-height: 1.65; margin: 10px 0 0; font-family: var(--mono); }
@@ -234,18 +236,28 @@
 <footer>
   <div class="wrap cols">
     <div>
-      <p><strong>Audit your own changes.</strong> Record the decisions your workflow already
-         makes, keep shipping, and every configuration change becomes a run with a verdict.</p>
+      <p><strong>Point this at your own workflow.</strong> Three steps, about five minutes.
+         Nothing leaves your machine and there is no service to sign up for.</p>
+      <ol class="steps">
+        <li><strong>Wrap the client you already have.</strong> Your call sites do not
+          change; every decision is appended to a file as it happens.</li>
+        <li><strong>Ship as usual.</strong> Each configuration you run on becomes a run
+          this page can judge — you never tell it that you shipped.</li>
+        <li><strong>Audit.</strong> <code>evaljev console traces.jsonl</code>.</li>
+      </ol>
       <p class="muted" id="provenance"></p>
     </div>
     <div>
 <pre><code>pip install "git+https://github.com/xxlya/evaljev"
 
-monitor.run(client, workflow_id="my-app",
-            node_id="classify", state=state,
-            questions=questions, policy=my_policy,
-            question_version="category-v4",
-            metadata={"request_id": request_id})
+from evaljev import watch
+client = watch(client, workflow_id="my-app")
+
+with client.request(request_id):
+    with client.step("classify"):
+        response, _ = client.decide(state=state,
+                                    questions=questions)
+client.record_outcome(what_happened, correct=True)
 
 $ evaljev console traces.jsonl --open</code></pre>
     </div>

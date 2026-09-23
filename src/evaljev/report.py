@@ -1627,7 +1627,9 @@ def _audit_runs(
             {request_of.get(t.trace_id) for t in baseline} - {None}
         )
         entry["changes"] = _run_changes(runs[i - 1], rows)
-        changed_nodes = sorted({c["node_id"] for c in entry["changes"]})
+        # `node_id` on a change is a display string ("classify request"); the raw ids
+        # live in `nodes`, and matching traces needs those.
+        changed_nodes = sorted({n for c in entry["changes"] for n in c["nodes"]})
         entry["label"] = ", ".join(
             sorted(
                 {

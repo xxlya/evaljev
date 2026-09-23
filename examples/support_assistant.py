@@ -39,10 +39,9 @@ from evaljev import (
     BudgetedJevClient,
     BudgetExceeded,
     JevHTTPClient,
-    JsonlTraceStore,
-    Monitor,
     SpendBudget,
     answer_branch,
+    watch,
 )
 
 REPO = Path(__file__).resolve().parent.parent
@@ -204,15 +203,18 @@ def run(phase: str, out: Path, cap: float) -> int:
 
     out.unlink(missing_ok=True)
     budget = SpendBudget({"jev": cap})
-    client = BudgetedJevClient(JevHTTPClient(), budget)
-    monitor = Monitor(JsonlTraceStore(out))
+    # One line: the client records every decision it makes. Nothing below changes
+    # shape because of it — `client.decide(...)` is the call this workflow already had.
+    client = watch(
+        BudgetedJevClient(JevHTTPClient(), budget),
+        workflow_id=WORKFLOW,
+        path=out,
+        workflow_version="assistant-3",
+    )
 
     handled, escalated = 0, 0
     for i, (message, intended) in enumerate(requests, 1):
-        # One id ties the three decisions together, so the dashboard can show the
-        # path a single request took instead of three unrelated rows.
         request_id = f"{phase}-{uuid.uuid4().hex[:8]}"
-        common = {"request_id": request_id, "phase": phase, "intended": intended}
 
         def review_policy(answers, _name="category"):
             answer = answers[_name]
@@ -221,57 +223,55 @@ def run(phase: str, out: Path, cap: float) -> int:
             return "needs_review" if p_max < REVIEW_BELOW else answer.selected
 
         try:
-            _, category_trace = monitor.run(
-                client,
-                workflow_id=WORKFLOW,
-                node_id="classify_request",
-                state={"message": message, "channel": "email"},
-                questions=questions,
-                policy=review_policy,
-                question_version=version,
-                policy_version=f"review-below-{REVIEW_BELOW}",
-                workflow_version="assistant-3",
-                metadata=common,
-            )
-            category = category_trace.action
+            # Everything inside this block belongs to one request, so the console can
+            # show the path it took rather than three unrelated decisions.
+            with client.request(request_id, phase=phase, intended=intended):
+                with client.step(
+                    "classify_request",
+                    policy=review_policy,
+                    question_version=version,
+                    policy_version=f"review-below-{REVIEW_BELOW}",
+                ):
+                    client.decide(
+                        state={"message": message, "channel": "email"}, questions=questions
+                    )
+                category_trace = client.last_trace
+                category = category_trace.action
 
-            _, urgency_trace = monitor.run(
-                client,
-                workflow_id=WORKFLOW,
-                node_id="rate_urgency",
-                # Later nodes see what the earlier ones decided — which is why a
-                # failure at the first node does not stay at the first node.
-                state={"message": message, "category": category},
-                questions=URGENCY_QUESTION,
-                # answer_branch, not int(value): a score answer's `value` is the
-                # expected level, and truncating it can land on a level the model
-                # gave no probability to at all. The branch an ordinal policy keys
-                # on is the argmax.
-                policy=lambda answers: f"priority_{answer_branch(answers['urgency'])}",
-                question_version="urgency-v1",
-                policy_version="argmax-level",
-                workflow_version="assistant-3",
-                metadata=common,
-            )
+                with client.step(
+                    "rate_urgency",
+                    # answer_branch, not int(value): a score answer's `value` is the
+                    # expected level, and truncating it can land on a level the model
+                    # gave no probability to at all.
+                    policy=lambda answers: f"priority_{answer_branch(answers['urgency'])}",
+                    question_version="urgency-v1",
+                    policy_version="argmax-level",
+                ):
+                    # Later steps see what the earlier ones decided — which is why a
+                    # failure at the first step does not stay at the first step.
+                    client.decide(
+                        state={"message": message, "category": category},
+                        questions=URGENCY_QUESTION,
+                    )
+                urgency_trace = client.last_trace
 
-            _, handoff_trace = monitor.run(
-                client,
-                workflow_id=WORKFLOW,
-                node_id="route_handoff",
-                state={
-                    "message": message,
-                    "category": category,
-                    "urgency": urgency_trace.action,
-                },
-                questions=HANDOFF_QUESTION,
-                policy=lambda answers: (
-                    "human" if (answers["needs_human"].value or 0) >= 0.5 else "auto"
-                ),
-                question_version="handoff-v1",
-                policy_version="noul-at-0.5",
-                workflow_version="assistant-3",
-                metadata=common,
-            )
+                with client.step(
+                    "route_handoff",
+                    policy=lambda answers: (
+                        "human" if (answers["needs_human"].value or 0) >= 0.5 else "auto"
+                    ),
+                    question_version="handoff-v1",
+                    policy_version="noul-at-0.5",
+                ):
+                    client.decide(
+                        state={
+                            "message": message,
+                            "category": category,
+                            "urgency": urgency_trace.action,
+                        },
+                        questions=HANDOFF_QUESTION,
+                    )
+                handoff_trace = client.last_trace
         except BudgetExceeded as exc:
             print(f"  stopped after {i - 1} requests: {exc}")
             break
@@ -284,16 +284,15 @@ def run(phase: str, out: Path, cap: float) -> int:
         # for a subset — the normal case, and the reason the label-free signals are
         # the ones that have to work.
         if i % 3 == 0:
-            correct = category == intended
-            monitor.record_outcome(
-                category_trace,
-                outcome={"reviewer_category": intended, "routed_to": category},
-                correct=correct,
+            client.record_outcome(
+                {"reviewer_category": intended, "routed_to": category},
+                correct=category == intended,
+                trace=category_trace,
             )
-            monitor.record_outcome(
-                handoff_trace,
-                outcome={"went_to_human": to_human},
+            client.record_outcome(
+                {"went_to_human": to_human},
                 correct=None if to_human else True,
+                trace=handoff_trace,
             )
 
         print(
@@ -301,9 +300,8 @@ def run(phase: str, out: Path, cap: float) -> int:
             f"{'HUMAN' if to_human else 'auto':<6} ${budget.spent['jev']:.4f}"
         )
 
-    traces = JsonlTraceStore(out).list(WORKFLOW)
     print(
-        f"\n{handled} requests · {len(traces)} decisions · {escalated} sent to a human "
+        f"\n{handled} requests · {escalated} sent to a human "
         f"({escalated / handled:.0%}) · ${budget.spent['jev']:.4f}"
     )
     print(f"wrote {out}")

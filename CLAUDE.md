@@ -68,6 +68,18 @@ Each was measured, not assumed. Re-verify before trusting after a version bump.
 - Cost is ~**$0.00015/decision**, and each response carries exact `usage.cost_usd`
   plus `credits_remaining_usd`.
 
+## The path a user is supposed to take
+
+`watch(client, workflow_id=...)` wraps a Jev client and records every decision without
+changing the call site — `client.decide(...)` keeps its arguments and its
+`(response, latency)` return. `client.step(...)` / `client.request(...)` are context
+managers (contextvars, so concurrent steps do not overwrite each other's labels) that
+add the node name, the versions and the request id; `client.record_outcome(...)`
+attaches an outcome to the last decision or a named one. `Monitor.run` is still there
+and is what `watch` calls, but it is the harness-being-written-from-scratch shape —
+nobody adopts a tool that needs their call sites restructured first, so **the README and
+the page lead with `watch`, and `examples/support_assistant.py` uses it**.
+
 ## Conventions that are load-bearing
 
 Breaking these silently undoes the point of the library.
