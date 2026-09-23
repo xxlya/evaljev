@@ -581,6 +581,70 @@ Useful flags:
 | `--json FILE` | — | write the whole analysis as JSON |
 | `--open` | off | open the page in a browser |
 
+## Auditing somebody else's runs
+
+Two different projects are called JevBench, which is worth stating before anything else:
+
+| | |
+| --- | --- |
+| [github.com/fstandhartinger/jevbench](https://github.com/fstandhartinger/jevbench) | Benchmark Heaven's benchmark for Jev-class decision models: labelled typed decisions, the JevBench Score over Intelligence / Calibration / Speed / Cost. This repo uses it as a **fixture** — labelled data is how you check a label-free detector fires when it should. |
+| [jevbench.dev](https://jevbench.dev/) | A harness leaderboard: Jev playing StarCraft II, scored on wins, latency and cost, with an open harness at [rapidstartup/jev-plays-starcraft-2](https://github.com/rapidstartup/jev-plays-starcraft-2). |
+
+### The leaderboard, with intervals
+
+A leaderboard is a list of rates, and a rate from a dozen runs is an interval. The board
+at jevbench.dev ranks its StarCraft II rows 01 to 04; here is the same data with the
+uncertainty left in:
+
+```
+$ python benchmarks/audit_leaderboard.py
+
+row                            published  measured   95% interval
+Jev 1.13 · typesafe wire            9/12     75.0%   [46.8%, 91.1%]
+Jev 1.13 · openrouter                5/6     83.3%   [43.6%, 97.0%]
+OpenJev wire                         0/9      0.0%   [0.0%, 29.9%]
+Untagged early harness              0/51      0.0%   [0.0%,  7.0%]
+
+  Jev 1.13 · typesafe wire   vs Jev 1.13 · openrouter    p=1.0000  not separated — needs ~198 runs each
+  Jev 1.13 · typesafe wire   vs OpenJev wire             p=0.0011  separated
+  Jev 1.13 · openrouter      vs OpenJev wire             p=0.0020  separated
+  OpenJev wire               vs Untagged early harness   p=1.0000  not separated — no run count would separate these
+```
+
+Rows 01 and 02 are the same model over two wires and the board ranks one above the other;
+at these counts they are one row, and telling them apart would take about 198 runs each.
+What the board *has* established is the gap between Jev and OpenJev, on nine and twelve
+runs. That is a real result and it is worth stating as one.
+
+### The harness runs, decision by decision
+
+The StarCraft harness already records everything this library needs — it writes each Jev
+call's state, questions, full probability distributions, latency, cost and the git
+revision of `player.py` to `runs/<stamp>/events.jsonl`. `load_sc2_runs` translates that
+into traces; no second instrumentation pass, nothing re-run:
+
+```python
+from evaljev import build_report, load_sc2_runs, render_html
+
+traces = load_sc2_runs("jev-plays-starcraft-2/runs")
+report = build_report(traces)          # each game is a run; its result.json is its outcome
+```
+
+One game is one run, one game loop is one request, and each question asked at that
+boundary is its own decision point. Because the harness hot-reloads `player.py` from git
+between decisions, the policy version changes *inside* a run — so a change of revision is
+a change the audit attributes, and "this revision made the army less sure of itself" is a
+tested claim rather than a hunch. Questions built in code carry no version, so the adapter
+fingerprints each one's wording and options; reword the instructions and the version moves
+on its own.
+
+What this adds to a win/loss board: wins are the rarest signal in the log. A 180-second
+run makes up to 300 decisions and produces one bit of outcome, so a board needs hundreds
+of runs to say anything. The decisions themselves are label-free evidence available
+immediately — how much probability the model put behind each order, whether it stayed
+inside the options the harness declared, whether the same observation got two different
+orders, and which decision point degraded when a revision shipped.
+
 ## The example workflow
 
 `examples/support_assistant.py` is a three-node support assistant — classify, rate

@@ -21,6 +21,12 @@ load it via `python-dotenv` pinned to the repo root; the library itself only rea
 
 Three different questions, often conflated:
 
+**Two projects are called JevBench.** `github.com/fstandhartinger/jevbench` is Benchmark
+Heaven's typed-decision benchmark (the JevBench Score; used here as a fixture).
+`jevbench.dev` is an unrelated harness leaderboard — Jev playing StarCraft II, scored on
+wins/latency/cost, harness at `rapidstartup/jev-plays-starcraft-2`. Do not conflate them;
+the repo's fixture is the first one.
+
 | | Question | Needs labels | When |
 |---|---|---|---|
 | JevBench | Is this decision **model** good? | yes | once, to choose |
@@ -184,6 +190,23 @@ fire on nearly every real workflow and say nothing.
 `jevbench-rotated.jsonl` (12 decisions, $0.0019, recorded 2026-09-21) is the same fault
 on the benchmark: `--degrade rotate-criteria`. Accuracy 12/12 → 2/12, schema adherence
 still 1.000. Kept as the labelled fixture that proves the detector fires.
+
+## Auditing other people's harnesses
+
+`adapters.py` reads the StarCraft harness's `runs/<stamp>/events.jsonl` into traces
+(`load_sc2_runs`). Its shape, confirmed against `jev_sc2/__main__.py`: rows are
+`{'time', 'event', **fields}`; `jev` events carry `state`/`questions`/`response`;
+`tick` events carry `loop` and `revision` (the git commit of `player.py`, hot-reloaded
+mid-run — so policy version changes *inside* a run); `result.json` holds the outcome.
+One game = one run (`run_id`), one loop = one request, one question = one node.
+`schema_fingerprint` versions questions that were never versioned, by hashing the
+wording and options.
+
+`benchmarks/audit_leaderboard.py` audits a published win/loss board: rates with Wilson
+intervals, pairwise Fisher, and the run count two indistinguishable rows would need.
+On the board read 22 Sep 2026 the top two rows (9/12 and 5/6, same model, two wires)
+are not separated and would need ~198 runs each; Jev vs OpenJev is separated at
+p=0.001. Numbers are transcribed, not fetched — re-check before quoting.
 
 ## Known gaps
 

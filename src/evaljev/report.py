@@ -1538,24 +1538,53 @@ def _run_changes(previous, current) -> list[dict]:
     whole window compares `category-v3` against `urgency-v1` and prints a change
     that never happened.
     """
-    changes: list[dict] = []
+    # One entry per distinct change, with the places it landed: a policy bumped at
+    # every node is one thing that happened, not one per node.
+    changes: dict[tuple, dict] = {}
     for node in sorted({t.node_id for t in current} & {t.node_id for t in previous}):
         before = [t for t in previous if t.node_id == node]
         after = [t for t in current if t.node_id == node]
         for finding in attribute(before, after)["findings"]:
             if finding["component"] == "behaviour":
                 continue
-            changes.append(
-                {
-                    "node_id": node,
-                    "component": finding["component"],
-                    "plain": _plain_finding(finding),
-                }
+            plain = _plain_finding(finding)
+            entry = changes.setdefault(
+                (finding["component"], plain),
+                {"component": finding["component"], "plain": plain, "nodes": []},
             )
-    return changes
+            entry["nodes"].append(node)
+    return [{**c, "node_id": ", ".join(_friendly(n) for n in c["nodes"])} for c in changes.values()]
 
 
-def _audit_runs(traces, groups, unsure_below: float, limit: int = 12) -> list[dict]:
+def _declared_runs(traces: Sequence[DecisionTrace], run_key: str) -> list[list[DecisionTrace]] | None:
+    """Runs the caller labelled, in the order they started.
+
+    A harness that already knows what a run is — a game, a batch, a nightly job —
+    should not have its boundaries guessed from version fields. Absent the label,
+    a run is a stretch of unchanged configuration, which is the best inference
+    available from the traces alone.
+    """
+    grouped: dict[str, list[DecisionTrace]] = {}
+    for trace in sorted(traces, key=lambda t: t.timestamp):
+        value = trace.metadata.get(run_key) if isinstance(trace.metadata, dict) else None
+        if value is None:
+            return None
+        grouped.setdefault(str(value), []).append(trace)
+    return list(grouped.values()) or None
+
+
+def _run_outcome(rows: Sequence[DecisionTrace]) -> str | None:
+    """What the caller recorded as this run's result, if anything."""
+    for trace in rows:
+        value = trace.metadata.get("run_outcome") if isinstance(trace.metadata, dict) else None
+        if value:
+            return str(value)
+    return None
+
+
+def _audit_runs(
+    traces, groups, unsure_below: float, run_key: str = "run_id", limit: int = 12
+) -> list[dict]:
     """One audit per deployment: what changed, what moved, and whether to keep it.
 
     Each run is measured against **the last stretch that held still** — every run
@@ -1564,7 +1593,7 @@ def _audit_runs(traces, groups, unsure_below: float, limit: int = 12) -> list[di
     dozen cannot establish a rate change that ninety against two dozen can, and the
     earlier runs are part of the same regime as long as nothing moved in them.
     """
-    runs = _split_runs(traces)
+    runs = _declared_runs(traces, run_key) or _split_runs(traces)
     request_of = {t.trace_id: rid for rid, rows in groups.items() for t in rows}
     out: list[dict] = []
     baseline_from = 0  # index of the first run in the current stable stretch
@@ -1583,6 +1612,7 @@ def _audit_runs(traces, groups, unsure_below: float, limit: int = 12) -> list[di
             "effects": [],
             "evidence": {"pairs": [], "total": 0, "changed": 0},
             "compared_against": 0,
+            "outcome": _run_outcome(rows),
         }
         if i == 0:
             entry["label"] = "the original"
@@ -1909,6 +1939,7 @@ def build_report(
     links: Sequence[Mapping[str, str]] | None = None,
     note: str | None = None,
     request_key: str = "request_id",
+    run_key: str = "run_id",
     human_actions: Sequence[str] | None = None,
 ) -> dict:
     """Compute the whole monitoring report as one JSON-serializable dict.
@@ -1917,6 +1948,10 @@ def build_report(
     human should see. It is deliberately a probability and not the API's
     ``confidence``, which rescales with the number of options, so the same
     threshold would mean different things for two questions.
+
+    ``run_key`` names the metadata field that says which run a decision belongs to —
+    a game, a batch, a job. Without it a run is inferred as a stretch of unchanged
+    configuration.
 
     ``human_actions`` names the branches that mean a person is now involved, so the
     console can separate "the workflow answered this alone and should not have" from
@@ -1980,7 +2015,7 @@ def build_report(
     comparisons = _same_input_comparisons(rows, drift, unsure_below)
     queue = _queue(groups, rows, checks, drift, unsure_below, human_actions, grouped=grouped)
     queue["headline"] = _queue_headline(queue, drift)
-    runs = _audit_runs(rows, groups, unsure_below)
+    runs = _audit_runs(rows, groups, unsure_below, run_key=run_key)
     _attach_run_counts(runs, queue)
     # Every diff the traces support, not only the ones that moved behaviour. A
     # component that changed while behaviour held still is not a fault, but it is
