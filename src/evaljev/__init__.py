@@ -1,4 +1,3 @@
-from .adapters import load_sc2_run, load_sc2_runs, schema_fingerprint
 from .attribution import (
     Finding,
     action_mix,
@@ -104,8 +103,6 @@ __all__ = [
     "expected_calibration_error",
     "fisher_exact_2x2",
     "lint_questions",
-    "load_sc2_run",
-    "load_sc2_runs",
     "min_discordant_for_significance",
     "min_samples_for_signed_rank",
     "optimize_binary_threshold",
@@ -120,7 +117,6 @@ __all__ = [
     "replay",
     "schema_adherence",
     "schema_diff",
-    "schema_fingerprint",
     "selective_risk_curve",
     "split_traces",
     "stability_check",

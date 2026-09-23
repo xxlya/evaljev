@@ -425,3 +425,28 @@ def test_the_baseline_pools_the_runs_that_held_still():
     newest = runs[0]
     assert newest["compared_against"] == 48      # both earlier runs, pooled
     assert newest["verdict"] == "harmful"
+
+
+def test_a_caller_can_declare_its_own_runs():
+    """A batch job knows what a run is; it should not have to be inferred."""
+    rows = workflow_traces(n=24)
+    for i, row in enumerate(rows):
+        row.metadata = {
+            **row.metadata,
+            "run_id": "batch-a" if i < 24 else "batch-b",
+            "run_outcome": "passed" if i < 24 else "failed",
+        }
+    runs = build_report(rows)["runs"]
+    assert [r["index"] for r in runs] == [2, 1]
+    assert {r["outcome"] for r in runs} == {"passed", "failed"}
+    # ...and the configuration never changed, so nothing is attributed to the split.
+    assert runs[0]["changes"] == []
+
+
+def test_declared_runs_win_over_inferred_ones():
+    rows = workflow_traces(n=24, broken_from=12)      # a config change mid-stream
+    for row in rows:
+        row.metadata = {**row.metadata, "run_id": "one-long-batch"}
+    runs = build_report(rows)["runs"]
+    assert len(runs) == 1                              # the caller said it was one run
+    assert runs[0]["verdict"] == "baseline"

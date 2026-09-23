@@ -583,18 +583,13 @@ Useful flags:
 
 ## Auditing a benchmark board
 
-Two different projects are called JevBench:
-
-| | |
-| --- | --- |
-| [github.com/fstandhartinger/jevbench](https://github.com/fstandhartinger/jevbench) | Benchmark Heaven's benchmark for Jev-class decision models — 52 systems ranked by the JevBench Score over Intelligence, Calibration, Speed and Cost. This is the one below. |
-| [jevbench.dev](https://jevbench.dev/) | An unrelated harness leaderboard: Jev playing StarCraft II, scored on wins. `benchmarks/audit_leaderboard.py` and `load_sc2_runs` cover that one. |
-
-A ranked board is a list of sample statistics printed as exact numbers. Intelligence is an
-accuracy over a finite set of items, so two systems half a point apart may be one system as
-far as the evidence goes. JevBench publishes per-item outcomes for 231 public items, which
-makes the **paired** test possible — every system saw the same items, so the comparison is
-exact McNemar, not two accuracies side by side.
+A ranked board is a list of sample statistics printed as exact numbers.
+[JevBench](https://github.com/fstandhartinger/jevbench) ranks 52 systems by a score over
+Intelligence, Calibration, Speed and Cost — and Intelligence is an accuracy over a finite
+set of items, so two systems half a point apart may be one system as far as the evidence
+goes. It publishes per-item outcomes for 231 public items, which makes the **paired** test
+possible: every system saw the same items, so the comparison is exact McNemar on the items
+they disagreed about, not two accuracies quoted side by side.
 
 ```bash
 git clone https://github.com/fstandhartinger/jevbench /tmp/jevbench
@@ -624,24 +619,6 @@ ways with the same right answer. Counting the pairs where a system got one right
 other wrong costs nothing extra and is already in their data: 1 of 36 for the top four, 6
 of 36 for rank 9. That gap appears in none of the four axes — and unlike every one of them,
 it needs no ground truth, so it is the one measurement here that also works on live traffic.
-
-## Auditing a harness's runs
-
-The StarCraft harness at [rapidstartup/jev-plays-starcraft-2](https://github.com/rapidstartup/jev-plays-starcraft-2)
-already records each Jev call's state, questions, full distributions, latency, cost and the
-git revision of `player.py` to `runs/<stamp>/events.jsonl`. `load_sc2_runs` translates that
-into traces — no second instrumentation pass, nothing re-run:
-
-```python
-from evaljev import build_report, load_sc2_runs
-
-report = build_report(load_sc2_runs("jev-plays-starcraft-2/runs"))
-```
-
-One game is a run, one game loop is a request, each question its own decision point. The
-harness hot-reloads `player.py` between decisions, so a revision change happens *inside* a
-run and becomes something the audit attributes. Questions built in code carry no version,
-so `schema_fingerprint` hashes their wording and options into one.
 
 ## The example workflow
 
