@@ -191,7 +191,19 @@ fire on nearly every real workflow and say nothing.
 on the benchmark: `--degrade rotate-criteria`. Accuracy 12/12 → 2/12, schema adherence
 still 1.000. Kept as the labelled fixture that proves the detector fires.
 
-## Auditing other people's harnesses
+## Auditing other people's boards and harnesses
+
+`benchmarks/audit_jevbench.py` audits the Benchmark Heaven board from its own
+artifacts (`results/v1.2/jevbench-v1.2-{results,per-task}.json`; the per-task file
+carries outcome codes for 231 public items × 52 systems, so comparisons are **paired**
+— exact McNemar, not two accuracies). Findings on v1.3.0, top 12: 6 of 11 adjacent
+pairs separated; two inversions where the lower-ranked system is the more accurate one
+(#8 over #7 at p<0.001, #11 over #10 at p=0.010 — speed and cost are half the composite);
+5 systems not separated from the leader. It also computes a column the board lacks:
+the standard tier is 36 paraphrase pairs, so "got one right and the other wrong" is a
+rephrasing-robustness count (1/36 for the top four, 6/36 for rank 9) — a **lower bound**,
+since outcomes record right/wrong and not which wrong answer.
+
 
 `adapters.py` reads the StarCraft harness's `runs/<stamp>/events.jsonl` into traces
 (`load_sc2_runs`). Its shape, confirmed against `jev_sc2/__main__.py`: rows are

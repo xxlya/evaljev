@@ -581,69 +581,67 @@ Useful flags:
 | `--json FILE` | — | write the whole analysis as JSON |
 | `--open` | off | open the page in a browser |
 
-## Auditing somebody else's runs
+## Auditing a benchmark board
 
-Two different projects are called JevBench, which is worth stating before anything else:
+Two different projects are called JevBench:
 
 | | |
 | --- | --- |
-| [github.com/fstandhartinger/jevbench](https://github.com/fstandhartinger/jevbench) | Benchmark Heaven's benchmark for Jev-class decision models: labelled typed decisions, the JevBench Score over Intelligence / Calibration / Speed / Cost. This repo uses it as a **fixture** — labelled data is how you check a label-free detector fires when it should. |
-| [jevbench.dev](https://jevbench.dev/) | A harness leaderboard: Jev playing StarCraft II, scored on wins, latency and cost, with an open harness at [rapidstartup/jev-plays-starcraft-2](https://github.com/rapidstartup/jev-plays-starcraft-2). |
+| [github.com/fstandhartinger/jevbench](https://github.com/fstandhartinger/jevbench) | Benchmark Heaven's benchmark for Jev-class decision models — 52 systems ranked by the JevBench Score over Intelligence, Calibration, Speed and Cost. This is the one below. |
+| [jevbench.dev](https://jevbench.dev/) | An unrelated harness leaderboard: Jev playing StarCraft II, scored on wins. `benchmarks/audit_leaderboard.py` and `load_sc2_runs` cover that one. |
 
-### The leaderboard, with intervals
+A ranked board is a list of sample statistics printed as exact numbers. Intelligence is an
+accuracy over a finite set of items, so two systems half a point apart may be one system as
+far as the evidence goes. JevBench publishes per-item outcomes for 231 public items, which
+makes the **paired** test possible — every system saw the same items, so the comparison is
+exact McNemar, not two accuracies side by side.
 
-A leaderboard is a list of rates, and a rate from a dozen runs is an interval. The board
-at jevbench.dev ranks its StarCraft II rows 01 to 04; here is the same data with the
-uncertainty left in:
-
-```
-$ python benchmarks/audit_leaderboard.py
-
-row                            published  measured   95% interval
-Jev 1.13 · typesafe wire            9/12     75.0%   [46.8%, 91.1%]
-Jev 1.13 · openrouter                5/6     83.3%   [43.6%, 97.0%]
-OpenJev wire                         0/9      0.0%   [0.0%, 29.9%]
-Untagged early harness              0/51      0.0%   [0.0%,  7.0%]
-
-  Jev 1.13 · typesafe wire   vs Jev 1.13 · openrouter    p=1.0000  not separated — needs ~198 runs each
-  Jev 1.13 · typesafe wire   vs OpenJev wire             p=0.0011  separated
-  Jev 1.13 · openrouter      vs OpenJev wire             p=0.0020  separated
-  OpenJev wire               vs Untagged early harness   p=1.0000  not separated — no run count would separate these
+```bash
+git clone https://github.com/fstandhartinger/jevbench /tmp/jevbench
+python benchmarks/audit_jevbench.py --repo /tmp/jevbench --top 12
 ```
 
-Rows 01 and 02 are the same model over two wires and the board ranks one above the other;
-at these counts they are one row, and telling them apart would take about 198 runs each.
-What the board *has* established is the gap between Jev and OpenJev, on nine and twelve
-runs. That is a real result and it is worth stating as one.
+Three things it found in the v1.3.0 artifacts, none of which dispute a measurement:
 
-### The harness runs, decision by decision
+**Half the ordering is not established.** Of the 11 adjacent pairs in the top 12, 6 are
+separated on accuracy and 5 are not — including ranks 2, 3 and 4, which sit within 2.0
+points of composite score and are statistically one group.
 
-The StarCraft harness already records everything this library needs — it writes each Jev
-call's state, questions, full probability distributions, latency, cost and the git
-revision of `player.py` to `runs/<stamp>/events.jsonl`. `load_sc2_runs` translates that
-into traces; no second instrumentation pass, nothing re-run:
+**Two pairs are ranked the wrong way round on accuracy.**
+
+```
+ 7 vs 8   decision-machine-1   decider-35b-a3b   #7 wins 9   #8 wins 45  p=0.000
+          #8 beats #7 on accuracy, and ranks below it: speed 81 vs 93, cost 45 vs 54
+10 vs 11  system-one-open      OpenJev 26B       #10 wins 18 #11 wins 38 p=0.010
+          #11 beats #10 on accuracy, and ranks below it: cost 45 vs 65
+```
+
+That is the composite working as designed — Speed and Cost are half the score — but a
+reader takes a ranking for an ordering of ability, so it is worth saying out loud.
+
+**A column the board does not have.** The standard tier is 36 decisions each written two
+ways with the same right answer. Counting the pairs where a system got one right and the
+other wrong costs nothing extra and is already in their data: 1 of 36 for the top four, 6
+of 36 for rank 9. That gap appears in none of the four axes — and unlike every one of them,
+it needs no ground truth, so it is the one measurement here that also works on live traffic.
+
+## Auditing a harness's runs
+
+The StarCraft harness at [rapidstartup/jev-plays-starcraft-2](https://github.com/rapidstartup/jev-plays-starcraft-2)
+already records each Jev call's state, questions, full distributions, latency, cost and the
+git revision of `player.py` to `runs/<stamp>/events.jsonl`. `load_sc2_runs` translates that
+into traces — no second instrumentation pass, nothing re-run:
 
 ```python
-from evaljev import build_report, load_sc2_runs, render_html
+from evaljev import build_report, load_sc2_runs
 
-traces = load_sc2_runs("jev-plays-starcraft-2/runs")
-report = build_report(traces)          # each game is a run; its result.json is its outcome
+report = build_report(load_sc2_runs("jev-plays-starcraft-2/runs"))
 ```
 
-One game is one run, one game loop is one request, and each question asked at that
-boundary is its own decision point. Because the harness hot-reloads `player.py` from git
-between decisions, the policy version changes *inside* a run — so a change of revision is
-a change the audit attributes, and "this revision made the army less sure of itself" is a
-tested claim rather than a hunch. Questions built in code carry no version, so the adapter
-fingerprints each one's wording and options; reword the instructions and the version moves
-on its own.
-
-What this adds to a win/loss board: wins are the rarest signal in the log. A 180-second
-run makes up to 300 decisions and produces one bit of outcome, so a board needs hundreds
-of runs to say anything. The decisions themselves are label-free evidence available
-immediately — how much probability the model put behind each order, whether it stayed
-inside the options the harness declared, whether the same observation got two different
-orders, and which decision point degraded when a revision shipped.
+One game is a run, one game loop is a request, each question its own decision point. The
+harness hot-reloads `player.py` between decisions, so a revision change happens *inside* a
+run and becomes something the audit attributes. Questions built in code carry no version,
+so `schema_fingerprint` hashes their wording and options into one.
 
 ## The example workflow
 
