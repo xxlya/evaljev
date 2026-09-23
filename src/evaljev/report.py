@@ -855,14 +855,17 @@ def _volume_series(traces, *, buckets: int = 24, unsure_below: float) -> list[di
     return out
 
 
-def _request_groups(traces, request_key: str) -> dict[str, list[DecisionTrace]]:
+def _request_groups(traces, request_key: str) -> tuple[dict[str, list[DecisionTrace]], bool]:
     """Decisions grouped into the request that produced them, in the order taken.
 
     A workflow makes several decisions per request, and reading them as unrelated
-    rows loses the thing an engineer actually wants: the path one request took.
-    Grouping needs an id shared across the nodes — by convention
-    ``metadata["request_id"]`` — and without one this returns nothing rather than
-    guessing, because guessing would invent a workflow that does not exist.
+    rows loses the thing an engineer wants: the path one request took. Grouping needs
+    an id shared across the nodes — by convention ``metadata["request_id"]``.
+
+    Without one, each decision becomes its own group rather than the console being
+    empty. The triage is still exactly right per decision; the only thing missing is
+    the path, and the page says which case it is instead of implying a workflow that
+    was never recorded.
     """
     groups: dict[str, list[DecisionTrace]] = {}
     for trace in traces:
@@ -870,9 +873,11 @@ def _request_groups(traces, request_key: str) -> dict[str, list[DecisionTrace]]:
         if value is None:
             continue
         groups.setdefault(str(value), []).append(trace)
-    for rows in groups.values():
-        rows.sort(key=lambda t: t.timestamp)
-    return groups
+    if groups:
+        for rows in groups.values():
+            rows.sort(key=lambda t: t.timestamp)
+        return groups, True
+    return {t.trace_id: [t] for t in traces}, False
 
 
 def _step(trace: DecisionTrace, unsure_below: float) -> dict:
@@ -907,8 +912,13 @@ def _trajectory(request_id: str, rows: Sequence[DecisionTrace], unsure_below: fl
     }
 
 
-def _workflow_path(traces, groups) -> list[dict]:
-    """The decision points in the order a request meets them."""
+def _workflow_path(traces, groups, drift=None) -> list[dict]:
+    """The decision points in the order a request meets them, with their trend.
+
+    A bare "typical certainty 0.86" is unreadable — high or low against what? Where
+    the drift check has a history for the node, the number is carried as a pair so
+    the strip can show the move rather than the level.
+    """
     position: dict[str, list[int]] = {}
     for rows in groups.values():
         for i, trace in enumerate(rows):
@@ -924,9 +934,19 @@ def _workflow_path(traces, groups) -> list[dict]:
         first = min(t.timestamp for t in by_node[node])
         return (1, first.timestamp(), node)
 
+    series_by_node = {
+        entry["node_id"]: entry
+        for entry in ((drift or {}).get("evidence", {}) or {}).get("nodes", [])
+    }
     path = []
     for node in sorted(by_node, key=order):
         rows = by_node[node]
+        entry = series_by_node.get(node)
+        before = after = None
+        if entry and len(entry["series"]) > 1:
+            earlier = [w["mean_certainty"] for w in entry["series"][:-1] if w["mean_certainty"]]
+            before = statistics.mean(earlier) if earlier else None
+            after = entry["series"][-1]["mean_certainty"]
         certainties = [c for c in (_decision_certainty(t) for t in rows) if c is not None]
         answer = rows[-1].answers[0] if rows[-1].answers else None
         path.append(
@@ -939,6 +959,9 @@ def _workflow_path(traces, groups) -> list[dict]:
                 "top_action": (
                     max(action_mix(rows).items(), key=lambda kv: kv[1])[0] if rows else None
                 ),
+                "certainty_before": before,
+                "certainty_after": after,
+                "drifted": bool(entry and entry["drifted"]),
             }
         )
     return path
@@ -1002,6 +1025,26 @@ FLAG_LABELS = {
     "disagreed": "a reviewer disagreed",
     "changed": "decided after this step changed",
 }
+
+#: Branch names that mean "a person is now involved", matched case-insensitively.
+#: A guess, and the page says so — pass ``human_actions`` to replace it. Getting this
+#: wrong in the quiet direction is the expensive one: a request counted as handled
+#: automatically when a person already has it wastes a reviewer's attention, so the
+#: page always shows which names it matched.
+HUMAN_ACTIONS = frozenset(
+    {
+        "human",
+        "needs_human",
+        "needs_review",
+        "review",
+        "manual",
+        "escalate",
+        "escalated",
+        "handoff",
+        "person",
+        "agent",
+    }
+)
 
 #: Which flag a request is filed under when it trips several. An answer that is not
 #: a valid distribution outranks everything: whatever the code downstream did with
@@ -1144,21 +1187,39 @@ def _flags_for(trace, certainty, unsure_below, resolved) -> list[dict]:
     return flags
 
 
-def _queue(groups, traces, checks, drift, unsure_below: float, limit: int = 80) -> dict:
-    """The operator's view: which requests need a person, and where they went wrong.
+def _queue(
+    groups,
+    traces,
+    checks,
+    drift,
+    unsure_below: float,
+    human_actions: Sequence[str] | None = None,
+    grouped: bool = True,
+    limit: int = 80,
+) -> dict:
+    """The operator's view: which decisions the workflow should not have made alone.
 
-    A request is triaged on its worst step. ``needs a person`` is not a guess about
-    the application's own escalation rules — it is the review line the caller passed
-    in, plus the three failures that make an answer unusable whatever the threshold
-    was: a distribution outside the schema, an identical input answered two ways, and
-    an outcome someone already disagreed with.
+    The first version of this counted every flagged request as "needs a person", which
+    on a real workflow is close to meaningless: this one already routes 92 of 117
+    requests to a person by its own policy, so the count mostly restated what the
+    application had already decided. A flag only asks something of a reader when it
+    **contradicts what the workflow did** — the assistant answered on its own, and the
+    evidence says it should not have. Those are 13 requests here, out of the 25 it
+    handled alone, and that is the number worth putting on a screen.
+
+    The flagged requests a person already has are still counted, as the evidence that
+    the escalation policy is earning its keep, but they are not a queue: nobody needs
+    to be told to look at something a human is already holding.
     """
     resolved = _flag_sets(traces, checks, drift)
+    human = {a.lower() for a in (human_actions or HUMAN_ACTIONS)}
     rows, by_node, by_flag = [], {}, {}
-    counts = {"needs_human": 0, "watch": 0, "auto": 0}
+    counts = {"acted_alone": 0, "with_person": 0, "clear": 0}
+    matched_actions: set[str] = set()
 
     for request_id, steps in groups.items():
         flags, step_rows = [], []
+        went_to_person = False
         for trace in steps:
             certainty = _decision_certainty(trace)
             step_flags = _flags_for(trace, certainty, unsure_below, resolved)
@@ -1169,26 +1230,35 @@ def _queue(groups, traces, checks, drift, unsure_below: float, limit: int = 80) 
             ]
             step_rows.append(step)
             flags += step["flags"]
+            branch = str(step["branch"] or "").lower()
+            if branch in human:
+                went_to_person = True
+                matched_actions.add(str(step["branch"]))
 
-        severity = {f["severity"] for f in flags}
-        status = "needs_human" if "high" in severity else "watch" if flags else "auto"
+        # An invalid distribution is not about routing: whatever the code downstream
+        # did with it, it did by accident, and a person holding the request does not
+        # undo that.
+        broken = any(f["code"] == "invalid" for f in flags)
+        if flags and (not went_to_person or broken):
+            status = "acted_alone"
+        elif flags:
+            status = "with_person"
+        else:
+            status = "clear"
         counts[status] += 1
+
         for flag in flags:
             by_node[flag["node_id"]] = by_node.get(flag["node_id"], 0) + 1
             by_flag[flag["code"]] = by_flag.get(flag["code"], 0) + 1
-        if status == "auto":
+        if status == "clear":
             continue
 
-        # The row's reason is its worst flag, not its first: "decided after this
-        # step changed" must not stand in front of "the answer broke the schema".
         worst = min(
             (f for s in step_rows for f in s["flags"]),
             key=lambda f: FLAG_PRIORITY.index(f["code"]),
             default=None,
         )
-        first = next(
-            (s for s in step_rows if worst and worst in s["flags"]), step_rows[0]
-        )
+        first = next((s for s in step_rows if worst and worst in s["flags"]), step_rows[0])
         primary, rest = _split_state(steps[0].state)
         rows.append(
             {
@@ -1197,6 +1267,7 @@ def _queue(groups, traces, checks, drift, unsure_below: float, limit: int = 80) 
                 "input": primary,
                 "input_rest": rest,
                 "status": status,
+                "went_to_person": went_to_person,
                 "flagged_at": first["node_id"],
                 "reason": worst["label"] if worst else "",
                 "detail": worst["detail"] if worst else "",
@@ -1206,17 +1277,13 @@ def _queue(groups, traces, checks, drift, unsure_below: float, limit: int = 80) 
             }
         )
 
-    rows.sort(key=lambda r: (r["status"] != "needs_human", r["time"]), reverse=False)
-    rows.sort(key=lambda r: (r["status"] == "needs_human", r["time"]), reverse=True)
-
-    # One entry per request, in order, for the ribbon across the top: the shape of
-    # the window at a glance, and where in it things started going wrong.
+    rows.sort(key=lambda r: (r["status"] == "acted_alone", r["time"]), reverse=True)
     timeline = sorted(
         (
             {
                 "time": steps[0].timestamp.isoformat(),
                 "status": next(
-                    (r["status"] for r in rows if r["request_id"] == request_id), "auto"
+                    (r["status"] for r in rows if r["request_id"] == request_id), "clear"
                 ),
                 "request_id": request_id,
             }
@@ -1225,11 +1292,17 @@ def _queue(groups, traces, checks, drift, unsure_below: float, limit: int = 80) 
         key=lambda row: row["time"],
     )
 
+    alone = counts["acted_alone"] + sum(
+        1
+        for request_id, steps in groups.items()
+        if not any(str(t.action or "").lower() in human for t in steps)
+        and all(r["request_id"] != request_id for r in rows)
+    )
     return {
         "rows": rows[:limit],
         "timeline": timeline,
-        "headline": _queue_headline(counts, rows, drift),
         "counts": counts,
+        "handled_alone": alone,
         "total": sum(counts.values()),
         "shown": min(len(rows), limit),
         "by_node": by_node,
@@ -1238,40 +1311,44 @@ def _queue(groups, traces, checks, drift, unsure_below: float, limit: int = 80) 
             for code, n in sorted(by_flag.items(), key=lambda kv: -kv[1])
         ],
         "review_line": unsure_below,
+        "unit": "request" if grouped else "decision",
+        "grouped": grouped,
+        "human_actions": sorted(matched_actions),
+        "human_actions_inferred": human_actions is None,
     }
 
 
-def _queue_headline(counts: Mapping[str, int], rows: Sequence[Mapping], drift) -> str:
-    """The state of the window as one sentence, for the top of the console.
+def _queue_headline(queue: Mapping[str, Any], drift) -> str:
+    """The state of the window as one sentence — a rate, not a bare count.
 
-    A sentence rather than a row of counters: the counters are on the page anyway,
-    and what a reader needs first is which of them matters and why.
+    A count on its own says nothing: "48 requests need a person" is alarming or
+    excellent depending on a denominator the reader does not have. Every number in
+    this sentence carries the thing it is a share of.
     """
-    total = sum(counts.values())
-    waiting, watch = counts["needs_human"], counts["watch"]
+    counts = queue["counts"]
+    alone, caught, total = counts["acted_alone"], counts["with_person"], queue["total"]
+    handled_alone = queue["handled_alone"]
+    unit = queue["unit"] + ("s" if total != 1 else "")
     flagged = [n for n in drift["evidence"].get("nodes", []) if n["drifted"]]
-    where = ""
-    if rows:
-        busiest: dict[str, int] = {}
-        for row in rows:
-            busiest[row["flagged_at"]] = busiest.get(row["flagged_at"], 0) + 1
-        node = max(busiest, key=lambda k: busiest[k])
-        where = f", most of them at the {_friendly(node)} step"
 
-    if not waiting and not watch:
-        return f"Nothing is waiting on a person. All {total} requests came through clear."
-    if not waiting:
+    if not alone and not caught:
+        return f"Nothing is flagged. All {total} {unit} came through clear."
+    if not alone:
         return (
-            f"Nothing is waiting on a person, though {watch} of {total} requests are worth "
-            f"a look{where}."
+            f"Nothing needs you. Your workflow routed {caught} flagged {unit} to a "
+            "person on its own, which is the escalation policy doing its job."
         )
-    sentence = f"{waiting} of {total} requests are waiting on a person{where}."
+
+    sentence = (
+        f"Your workflow answered {handled_alone} of {total} {unit} without a person. "
+        f"{alone} of those it should not have."
+    )
+    if caught:
+        sentence += f" It caught {caught} others itself and passed them on."
     if flagged:
         sentence += (
-            " That step started answering differently partway through this window."
-            if flagged[0]["node_id"] in where
-            else f" Meanwhile the {_friendly(flagged[0]['node_id'])} step started answering "
-            "differently partway through this window."
+            f" The {_friendly(flagged[0]['node_id'])} step started answering differently "
+            "partway through this window."
         )
     return sentence
 
@@ -1445,6 +1522,7 @@ def build_report(
     links: Sequence[Mapping[str, str]] | None = None,
     note: str | None = None,
     request_key: str = "request_id",
+    human_actions: Sequence[str] | None = None,
 ) -> dict:
     """Compute the whole monitoring report as one JSON-serializable dict.
 
@@ -1452,6 +1530,11 @@ def build_report(
     human should see. It is deliberately a probability and not the API's
     ``confidence``, which rescales with the number of options, so the same
     threshold would mean different things for two questions.
+
+    ``human_actions`` names the branches that mean a person is now involved, so the
+    console can separate "the workflow answered this alone and should not have" from
+    "the workflow escalated it, as designed". Left out, a small vocabulary is matched
+    by name and the page says the match was inferred.
 
     ``request_key`` names the metadata field that ties the decisions of one
     request together (``metadata={"request_id": ...}`` on every ``Monitor.run``).
@@ -1499,12 +1582,18 @@ def build_report(
 
     unknowns = [c for c in checks if c["status"] == "unknown"]
     drift = next(c for c in checks if c["id"] == "drift")
-    groups = _request_groups(rows, request_key)
-    trajectories = [
-        _trajectory(rid, group_rows, unsure_below)
-        for rid, group_rows in sorted(groups.items(), key=lambda kv: kv[1][0].timestamp)
-    ]
+    groups, grouped = _request_groups(rows, request_key)
+    trajectories = (
+        [
+            _trajectory(rid, group_rows, unsure_below)
+            for rid, group_rows in sorted(groups.items(), key=lambda kv: kv[1][0].timestamp)
+        ]
+        if grouped
+        else []
+    )
     comparisons = _same_input_comparisons(rows, drift, unsure_below)
+    queue = _queue(groups, rows, checks, drift, unsure_below, human_actions, grouped=grouped)
+    queue["headline"] = _queue_headline(queue, drift)
     # Every diff the traces support, not only the ones that moved behaviour. A
     # component that changed while behaviour held still is not a fault, but it is
     # the first thing anyone asks about when a number looks odd next week.
@@ -1564,8 +1653,8 @@ def build_report(
         ],
         "attribution": findings,
         "story": _story(checks, drift, comparisons, findings, len(groups)),
-        "queue": _queue(groups, rows, checks, drift, unsure_below),
-        "workflow": _workflow_path(rows, groups),
+        "queue": queue,
+        "workflow": _workflow_path(rows, groups, drift),
         "trajectories": _select_trajectories(trajectories),
         "comparisons": comparisons,
         "decisions": _decision_rows(rows, limit=recent, unsure_below=unsure_below),

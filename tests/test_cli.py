@@ -41,7 +41,7 @@ def test_report_writes_a_self_contained_page(tmp_path, traces_file, capsys):
     assert html.startswith("<!doctype html>")
     assert "__EVALJEV_REPORT__" not in html
     assert "src=" not in html  # nothing to fetch — the page works offline
-    assert "12 decisions" in capsys.readouterr().out
+    assert "All 12 decisions came through clear" in capsys.readouterr().out
 
 
 def test_report_can_also_emit_the_json(tmp_path, traces_file):
@@ -94,3 +94,5 @@ def test_unsure_threshold_reaches_the_report(tmp_path, traces_file):
     # every decision sits at 0.90, so a 0.95 line puts all of them in the pile
     assert report["checks"][0]["id"] == "certainty"
     assert report["checks"][0]["status"] == "problem"
+    # ...and every request becomes one the workflow answered alone under doubt.
+    assert report["queue"]["counts"]["acted_alone"] == 12

@@ -93,7 +93,10 @@ Breaking these silently undoes the point of the library.
    answer as a schema failure; with no `labels` argument it now derives each trace's
    own. And an ordinal policy of `int(expected_value)` can pick a level the model gave
    no probability to — use `answer_branch`, which is the argmax.
-9. **The dashboard never renders "unknown" as healthy.** A check with too little
+9. **A count without its denominator is not a number.** Every figure on the console
+   carries what it is a share of, and node-level certainty is shown as before → after
+   rather than as a level. A bare "0.86" cannot be read by anyone.
+10. **The dashboard never renders "unknown" as healthy.** A check with too little
    evidence reports `unknown`, is excluded from the score, and is listed under the
    verdict. `report.py` translates; it computes nothing of its own — every number on
    the page comes from a library function, and no prose on it is model-written. The
@@ -121,7 +124,16 @@ hand-edit `index.html`:
   changed one accented, a queue, and the flagged path for the selected request. This is
   the product shape; the report is the diagnosis behind it.
 
-  Two things about the console are deliberate. It opens with a **sentence**, not a row
+  The number it leads with is **decisions the workflow made alone that it should not
+  have**, not "requests that need a person". The first version counted every flagged
+  request and read 48 on the example workflow — meaningless, because that workflow
+  already escalates 92 of 117 by its own policy, so the count restated the
+  application's own decision. A flag only asks something of a reader when it
+  contradicts what the workflow did. `human_actions` (inferred from a name
+  vocabulary, overridable) is what makes that split possible, and the page always
+  says which names it matched.
+
+  Two more things about the console are deliberate. It opens with a **sentence**, not a row
   of KPI cards — the counters are on the page anyway, and what a reader needs first is
   which of them matters and why. And **no identifier is printed in snake_case**:
   `classify_request` reads as "classify request" everywhere, with the exact id kept in

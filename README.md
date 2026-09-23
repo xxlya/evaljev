@@ -6,8 +6,8 @@ EvalJev instruments typed probabilistic decisions, links them to downstream outc
 
 > Jev makes decisions fast. EvalJev helps you know when those decisions — and the workflow around them — are reliable.
 
-**Live console: <https://xxlya.github.io/evaljev/>** — which requests need a person right
-now, and where in the workflow they were flagged. A three-step support assistant, 351 real
+**Live console: <https://xxlya.github.io/evaljev/>** — which decisions your workflow made
+on its own that it should not have, and where along the way each one went wrong. A three-step support assistant, 351 real
 decisions, and the question edit that quietly started routing customers to a human. Point
 it at your own traces and you get the same screen:
 
@@ -491,27 +491,47 @@ evaljev demo                          # either view, on the recorded example run
 
 Live example: **<https://xxlya.github.io/evaljev/>**
 
-Three numbers across the top — **need a person**, **worth a look**, **handled
-automatically** — then your workflow as a strip of decision points with the one that
-changed marked, then the queue. Pick a request and you get the path it took: every
-decision, the probability behind it, and the step that raised the flag.
+It opens with a sentence, because a count without its denominator says nothing:
 
-A request is queued when EvalJev can say something concrete about it:
+> Your workflow answered **26 of 117** requests without a person. **14 of those it should
+> not have.** It caught 47 others itself and passed them on. The classify request step
+> started answering differently partway through this window.
 
-| Flag | What it means | Needs a person |
-| --- | --- | --- |
-| answer broke the schema | the distribution was not over the options you declared | yes |
-| a reviewer disagreed | the recorded outcome contradicts what was decided | yes |
-| same input decided differently | an identical input took another branch elsewhere in the stream | yes |
-| model was unsure | the top answer fell under your `--unsure-below` review line | yes |
-| decided after this step changed | the decision point started answering differently in this window | worth a look |
+That second number is the one the console is built around. An earlier version counted
+every flagged request as "needs a person" — on this workflow that read **48**, which was
+close to meaningless: the assistant already routes 92 of 117 requests to a human by its
+own policy, so the count mostly restated what the application had already decided. A flag
+only asks something of a reader when it **contradicts what the workflow did**.
 
-Everything else is counted and left out of the queue: a console should only show you what
-it wants you to look at.
+So requests split three ways, and only the first is a queue:
 
-The queue needs one thing from your code — the same `metadata={"request_id": ...}` at every
-`Monitor.run` in a request, so the steps can be tied into a path. Without it the page still
-works; it just cannot show a path it was never told about, and says so rather than guessing.
+| | |
+| --- | --- |
+| **answered alone, but shouldn't have** | flagged, and the workflow acted without a person |
+| **flagged, already with a person** | the escalation policy caught it — evidence it is earning its keep, not a task |
+| **came through clear** | nothing flagged; counted, not listed |
+
+Which branches mean "a person is involved" is matched by name (`human`, `needs_review`,
+`escalate`, …) and the page says the match was inferred. `--human-actions refund,escalate`
+sets it yourself.
+
+A decision is flagged when EvalJev can say something concrete about it:
+
+| Flag | What it means |
+| --- | --- |
+| answer broke the schema | the distribution was not over the options you declared — code downstream acted on garbage, whoever was holding the request |
+| a reviewer disagreed | the recorded outcome contradicts what was decided |
+| same input decided differently | an identical input took another branch elsewhere in the stream |
+| model was unsure | the top answer fell under your `--unsure-below` review line |
+| decided after this step changed | the decision point started answering differently in this window |
+
+Below that, your workflow as a line of steps — each with its certainty *before → after*
+rather than a bare level — and then the queue. Pick one and you get the path it took:
+every decision, the probability behind it, and the step that raised the flag.
+
+Give it `metadata={"request_id": ...}` at every `Monitor.run` in a request and it triages
+whole requests with their path. Without one it triages each decision on its own and says
+so — a missing path is not a missing console.
 
 ## The full report
 
@@ -544,6 +564,7 @@ Useful flags (every command accepts them):
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--unsure-below P` | `0.6` | the review line: probability under which a decision needs a person. A probability, never `confidence` — see [below](#confidence-is-a-margin-not-a-probability) |
+| `--human-actions A,B` | matched by name | the branches that mean a person is now involved |
 | `--view console\|report` | per command | which screen to render |
 | `--workflow ID` | all | restrict to one `workflow_id` |
 | `--window N` | a quarter of each node's traffic | decisions per drift-comparison window |
@@ -556,7 +577,7 @@ From Python, for a custom renderer or an assertion in CI:
 from evaljev import JsonlTraceStore, build_report, render_html
 
 report = build_report(JsonlTraceStore("traces.jsonl").list(), unsure_below=0.6)
-assert report["queue"]["counts"]["needs_human"] < 10, report["queue"]["by_flag"]
+assert report["queue"]["counts"]["acted_alone"] == 0, report["queue"]["headline"]
 Path("console.html").write_text(render_html(report, "console"))
 ```
 

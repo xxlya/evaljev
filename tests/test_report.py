@@ -242,12 +242,16 @@ def test_requests_are_followed_through_the_workflow():
     assert steps[0]["top"][0][0] == "refund"
 
 
-def test_without_a_request_id_the_workflow_is_not_guessed():
-    rows = workflow_traces()
+def test_without_a_request_id_each_decision_stands_on_its_own():
+    """No request id is a missing path, not a missing console."""
+    rows = workflow_traces(n=12)
     for row in rows:
         row.metadata = {}
     report = build_report(rows)
-    assert report["trajectories"] == []
+    assert report["trajectories"] == []                 # a path was never recorded
+    assert report["queue"]["unit"] == "decision"        # ...so the unit is the decision
+    assert report["queue"]["total"] == 24
+    assert "24 decisions" in report["queue"]["headline"]
     # The nodes are still listed — only the path through them is unknown.
     assert {n["node_id"] for n in report["workflow"]} == {"classify", "handoff"}
 
@@ -291,7 +295,7 @@ def test_the_queue_triages_requests_rather_than_summarising_them():
     report = build_report(workflow_traces(n=48, broken_from=36), window_size=12)
     queue = report["queue"]
     assert queue["total"] == 48
-    assert queue["counts"]["needs_human"] + queue["counts"]["watch"] + queue["counts"]["auto"] == 48
+    assert sum(queue["counts"].values()) == 48
     # Every listed row carries the reason and the action, not just a score.
     for row in queue["rows"]:
         assert row["reason"] and row["advice"]
@@ -299,15 +303,51 @@ def test_the_queue_triages_requests_rather_than_summarising_them():
         assert any(step["flags"] for step in row["steps"])
 
 
-def test_an_unsure_decision_asks_for_a_person():
+def test_a_shaky_decision_the_workflow_made_alone_is_the_one_that_asks_for_you():
+    """The distinction the whole console turns on.
+
+    Counting every flagged request as "needs a person" restates what the application
+    already decided: a workflow that escalates most of its traffic would show a huge
+    number that asks nothing of anyone. What asks something is a flag on a decision
+    the workflow answered *by itself*.
+    """
     rows = workflow_traces(n=12)
+    rows[0].state = {"message": "a one-off message"}      # so no repeat flag confuses it
+    rows[0].answers[0].probabilities = {"refund": 0.45, "status": 0.4, "other": 0.15}
+    rows[0].action = "refund"          # answered alone, and unsure
+    rows[2].state = {"message": "another one-off message"}
+    rows[2].answers[0].probabilities = {"refund": 0.45, "status": 0.4, "other": 0.15}
+    rows[2].action = "needs_review"    # unsure, but the workflow escalated it
+
+    queue = build_report(rows, unsure_below=0.6)["queue"]
+    alone = next(r for r in queue["rows"] if r["status"] == "acted_alone")
+    caught = next(r for r in queue["rows"] if r["status"] == "with_person")
+    assert alone["reason"] == "model was unsure"
+    assert alone["went_to_person"] is False
+    assert caught["went_to_person"] is True
+    assert queue["counts"]["acted_alone"] == 1
+    assert queue["counts"]["with_person"] == 1
+
+
+def test_the_headline_is_a_rate_and_not_a_bare_count():
+    rows = workflow_traces(n=12)
+    rows[0].state = {"message": "a one-off message"}
     rows[0].answers[0].probabilities = {"refund": 0.45, "status": 0.4, "other": 0.15}
     rows[0].action = "refund"
-    queue = build_report(rows, unsure_below=0.6)["queue"]
-    first = queue["rows"][0]
-    assert first["status"] == "needs_human"
-    assert first["reason"] == "model was unsure"
-    assert "person" in first["advice"]
+    headline = build_report(rows, unsure_below=0.6)["queue"]["headline"]
+    assert "of 12 requests" in headline
+    assert "1 of those it should not have" in headline
+
+
+def test_naming_your_own_human_branches_changes_the_split():
+    rows = workflow_traces(n=12)
+    rows[0].state = {"message": "a one-off message"}
+    rows[0].answers[0].probabilities = {"refund": 0.45, "status": 0.4, "other": 0.15}
+    rows[0].action = "refund"
+    queue = build_report(rows, unsure_below=0.6, human_actions=["refund"])["queue"]
+    assert queue["counts"]["acted_alone"] == 0     # "refund" now means a person has it
+    assert queue["counts"]["with_person"] == 1
+    assert queue["human_actions_inferred"] is False
 
 
 def test_an_answer_outside_the_schema_outranks_a_softer_flag():
@@ -322,7 +362,7 @@ def test_an_answer_outside_the_schema_outranks_a_softer_flag():
 
 def test_clean_requests_are_counted_but_not_queued():
     queue = build_report(workflow_traces(n=12))["queue"]
-    assert queue["counts"]["auto"] == 12
+    assert queue["counts"]["clear"] == 12
     assert queue["rows"] == []
 
 

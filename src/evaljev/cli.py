@@ -65,6 +65,11 @@ def _report_kwargs(args) -> dict:
         "workflow_id": args.workflow,
         "title": args.title,
         "unsure_below": args.unsure_below,
+        "human_actions": (
+            [a.strip() for a in args.human_actions.split(",") if a.strip()]
+            if args.human_actions
+            else None
+        ),
         "window_size": args.window,
         "recent": args.recent,
     }
@@ -80,12 +85,8 @@ def _write(report, out: Path, json_path: str | None, view: str = "console") -> N
 def _summarize(report, out: Path) -> None:
     queue = report["queue"]
     print(f"wrote {out}  ({out.stat().st_size // 1024} KB)")
-    print(
-        f"  {report['meta']['n']} decisions · {queue['total']} requests · "
-        f"{queue['counts']['needs_human']} need a person, "
-        f"{queue['counts']['watch']} worth a look"
-    )
-    for row in report["queue"]["by_flag"]:
+    print(f"  {queue['headline']}")
+    for row in queue["by_flag"]:
         print(f"  {row['n']:>4}  {row['label']}")
 
 
@@ -107,6 +108,7 @@ def cmd_demo(args) -> int:
         window_size=args.window,
         recent=args.recent,
         workflow_id=args.workflow,
+        human_actions=_report_kwargs(args)["human_actions"],
     )
     out = Path(args.output)
     _write(report, out, args.json, args.view)
@@ -192,6 +194,14 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument("--recent", type=int, default=60, metavar="N",
                    help="how many recent decisions to list (default: 60)")
+    p.add_argument(
+        "--human-actions",
+        metavar="A,B",
+        help="the branches that mean a person is now involved, comma separated "
+        "(default: a small vocabulary matched by name, e.g. human, needs_review, escalate). "
+        "This is what separates 'the workflow answered alone and should not have' from "
+        "'the workflow escalated it, as designed'.",
+    )
     p.add_argument("--json", metavar="FILE", help="also write the report as JSON")
     p.add_argument("--open", action="store_true", help="open the page in a browser")
     p.add_argument(

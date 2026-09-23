@@ -123,8 +123,8 @@
   .ribbon .tick { flex: 1 1 0; min-width: 2px; max-width: 9px; border-radius: 2px;
                   background: var(--good); opacity: .34; height: 34%;
                   transition: height .12s ease, opacity .12s ease; cursor: default; }
-  .ribbon .tick.watch { background: var(--warning); opacity: .72; height: 66%; }
-  .ribbon .tick.needs_human { background: var(--critical); opacity: .82; height: 100%; cursor: pointer; }
+  .ribbon .tick.with_person { background: var(--warning); opacity: .7; height: 62%; }
+  .ribbon .tick.acted_alone { background: var(--critical); opacity: .85; height: 100%; cursor: pointer; }
   .ribbon .tick:hover, .ribbon .tick.on { opacity: 1; }
   .ribbon .tick.on { outline: 1px solid var(--text-primary); outline-offset: 1px; }
   .axis { display: flex; justify-content: space-between; font-family: var(--mono);
@@ -141,13 +141,15 @@
                 display: block; line-height: 1.1; }
   .filters .l { font-size: 13px; display: flex; align-items: center; gap: 7px; margin-top: 3px; }
   .filters .swatch { width: 8px; height: 8px; border-radius: 2px; background: var(--good); }
-  .filters button[data-k="needs_human"] .swatch { background: var(--critical); }
-  .filters button[data-k="watch"] .swatch { background: var(--warning); }
+  .filters button[data-k="acted_alone"] .swatch { background: var(--critical); }
+  .filters button[data-k="with_person"] .swatch { background: var(--warning); }
   .filters button[aria-pressed="true"] .l { color: var(--text-primary); font-weight: 600; }
   .filters button[aria-pressed="true"] { box-shadow: inset 0 -2px 0 var(--text-primary); }
   .filters button:hover .l { color: var(--text-primary); }
 
   /* ---------- workflow strip ---------- */
+  .inferred { font-size: 12.5px; color: var(--text-muted); margin: 14px 0 0; }
+  .inferred code { font-size: 12px; }
   .flow-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 0 14px; margin: 30px 0 0;
                 padding-top: 18px; border-top: 1px solid var(--border); }
   .flow-strip .stage { padding: 2px 0; }
@@ -180,8 +182,8 @@
   .rows .meta { font-family: var(--mono); font-size: 11px; color: var(--text-muted);
                 display: flex; align-items: center; gap: 7px; }
   .rows .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
-  .rows .dot.needs_human { background: var(--critical); }
-  .rows .dot.watch { background: var(--warning); }
+  .rows .dot.acted_alone { background: var(--critical); }
+  .rows .dot.with_person { background: var(--warning); }
   .rows .meta { display: flex; align-items: center; gap: 7px; }
   .rows .text, .rows .why { display: block; }
   .rows .text { font-size: 14px; margin: 5px 0 4px; line-height: 1.45; }
@@ -260,6 +262,7 @@
     </div>
 
     <nav class="filters" id="filters"></nav>
+    <p class="inferred" id="inferred"></p>
     <div class="flow-strip" id="program"></div>
   </div>
 </header>
@@ -332,11 +335,16 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
   const hideTip = () => (tip.style.opacity = "0");
 
   const FILTERS = [
-    ["needs_human", "waiting on a person"],
-    ["watch", "worth a look"],
-    ["auto", "came through clear"],
+    ["acted_alone", "answered alone, but shouldn\u2019t have"],
+    ["with_person", "flagged, already with a person"],
+    ["clear", "came through clear"],
   ];
-  let filter = "needs_human";
+  const HEADINGS = {
+    acted_alone: "Answered alone, but shouldn\u2019t have",
+    with_person: "Flagged, already with a person",
+    clear: "Came through clear",
+  };
+  let filter = "acted_alone";
   let selected = 0;
 
   function rows() { return (D.queue.rows || []).filter((r) => r.status === filter); }
@@ -350,14 +358,22 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
       ? `Decision console \u00b7 live, every ${Math.round(m.live_interval_ms / 1000)}s`
       : `Decision console \u00b7 ${clock(m.first_seen, true)} to ${clock(m.last_seen, true)}`;
     $("#pulse").style.background =
-      q.counts.needs_human ? "var(--critical)" : q.counts.watch ? "var(--warning)" : "var(--good)";
-    $("#headline").innerHTML = esc(q.headline).replace(
-      /^(\d+) of (\d+)/, '<em>$1</em> of $2');
+      q.counts.acted_alone ? "var(--critical)" : q.counts.with_person ? "var(--warning)" : "var(--good)";
+    // Emphasise the one number the sentence is actually about.
+    $("#headline").innerHTML = esc(q.headline)
+      .replace(/(\d+) of those it should not have/, "<em>$1 of those it should not have</em>");
     const note = $("#note");
     note.hidden = !m.note;
     if (m.note) note.innerHTML = m.note;
     $("#links").innerHTML = (m.links || [])
       .map((l) => `<a class="ghost" href="${esc(l.href)}">${esc(l.label)}</a>`).join("");
+    const q2 = D.queue;
+    $("#inferred").innerHTML = q2.human_actions.length
+      ? `Counting ${q2.human_actions.map((a) => `<strong>${esc(words(a))}</strong>`).join(" and ")} ` +
+        `as "a person is involved"${q2.human_actions_inferred
+          ? ' \u2014 matched by name, pass <code>--human-actions</code> to set it yourself' : ""}.`
+      : `No branch in this workflow looked like a route to a person, so every flagged request ` +
+        `is listed. Pass <code>--human-actions</code> to name the ones that are.`;
     $("#provenance").textContent =
       `${int(m.n)} decisions recorded ${clock(m.first_seen, true)} to ${clock(m.last_seen, true)}, ` +
       `computed by EvalJev from the traces. Nothing on this page was written by a model.`;
@@ -370,7 +386,11 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
     const wrap = $("#ribbon");
     wrap.innerHTML = line.map((r, i) =>
       `<div class="tick ${esc(r.status)}" data-i="${i}" tabindex="-1"></div>`).join("");
-    const label = { needs_human: "waiting on a person", watch: "worth a look", auto: "clear" };
+    const label = {
+      acted_alone: "answered alone, but shouldn\u2019t have",
+      with_person: "flagged, a person has it",
+      clear: "clear",
+    };
     wrap.querySelectorAll(".tick").forEach((el) => {
       const r = line[Number(el.dataset.i)];
       el.addEventListener("pointerenter", (e) =>
@@ -379,7 +399,7 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
         showTip(`${esc(clock(r.time, true))} \u00b7 ${esc(label[r.status])}`, e));
       el.addEventListener("pointerleave", hideTip);
       el.addEventListener("click", () => {
-        if (r.status === "auto") return;
+        if (r.status === "clear") return;
         filter = r.status;
         const list = rows();
         const i = list.findIndex((x) => x.request_id === r.request_id);
@@ -410,21 +430,25 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
     $("#program").innerHTML = D.workflow.map((n, i) => `
       ${i ? '<div class="link">\u2192</div>' : ""}
       <div class="stage ${changed.has(n.node_id) ? "changed" : ""}">
-        <div class="name">${esc(words(n.node_id))}</div>
-        <div class="sub">${changed.has(n.node_id) ? "started answering differently \u00b7 " : ""}${
-          byNode[n.node_id] ? int(byNode[n.node_id]) + " flagged here" : "nothing flagged"}</div>
+        <div class="name" title="${esc(n.node_id)}">${esc(words(n.node_id))}</div>
+        <div class="sub">${
+          n.certainty_before != null && n.certainty_after != null
+            ? `typical certainty ${num(n.certainty_before, 2)} \u2192 ${num(n.certainty_after, 2)}`
+            : `typical certainty ${num(n.median_certainty, 2)}`}<br>${
+          byNode[n.node_id]
+            ? `${int(byNode[n.node_id])} of ${int(n.n)} decisions flagged`
+            : "nothing flagged"}</div>
       </div>`).join("");
   }
 
   function renderRows() {
     const list = rows();
     const multiday = new Date(D.meta.last_seen) - new Date(D.meta.first_seen) > 864e5;
-    const heading = { needs_human: "Waiting on a person", watch: "Worth a look", auto: "Came through clear" };
-    $("#list-head").textContent = `${heading[filter]} \u00b7 ${int(D.queue.counts[filter])}`;
+    $("#list-head").textContent = `${HEADINGS[filter]} \u00b7 ${int(D.queue.counts[filter])}`;
 
-    if (filter === "auto") {
+    if (filter === "clear") {
       $("#rows").innerHTML = `<p class="empty" style="padding:12px 10px">` +
-        `${int(D.queue.counts.auto)} requests came through with nothing flagged, so they are not ` +
+        `${int(D.queue.counts.clear)} requests came through with nothing flagged, so they are not ` +
         `listed. A console should only show you what it wants you to look at.</p>`;
       $("#focus").innerHTML = `<h2>Nothing to review</h2><p class="empty">Pick one of the other two piles.</p>`;
       return;
@@ -457,6 +481,10 @@ window.EVALJEV_REPORT = "__EVALJEV_REPORT__";
       <p class="sub">${r.input_rest ? esc(r.input_rest) + " \u00b7 " : ""}${esc(clock(r.time, true))}
         \u00b7 your workflow sent it to <strong>${esc(words(r.final_action))}</strong></p>
       <dl class="reason">
+        <dt>Routing</dt>
+        <dd>${r.went_to_person
+          ? "your workflow passed this to a person, so it is here as evidence rather than as a task"
+          : "your workflow answered this one on its own"}.</dd>
         <dt>Flagged</dt>
         <dd><span class="flagword">${esc(words(r.reason))}</span> at
           ${esc(words(r.flagged_at))} \u2014 ${esc(words(r.detail))}.</dd>

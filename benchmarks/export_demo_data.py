@@ -182,10 +182,7 @@ def write_pages() -> None:
 
     queue = console["queue"]
     print(f"wrote {CONSOLE} ({CONSOLE.stat().st_size // 1024} KB)")
-    print(
-        f"  {queue['total']} requests · {queue['counts']['needs_human']} need a person · "
-        f"{queue['counts']['watch']} worth a look · {queue['counts']['auto']} clean"
-    )
+    print(f"  {queue['headline']}")
     print(f"wrote {FULL_REPORT} ({FULL_REPORT.stat().st_size // 1024} KB)")
 
 
